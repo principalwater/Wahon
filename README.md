@@ -21,6 +21,14 @@ A free and open source cross-platform manga reader built with Kotlin Multiplatfo
 - **Voyager** — navigation
 - **QuickJS** — sandboxed extension runtime
 
+## Current Focus
+
+- Stabilize extension runtime compatibility using universal adapter profiles.
+- Improve reader reliability (resume target, read/unread transitions, progress persistence).
+- Keep Updates semantics accurate (real new chapters, not unread backlog noise).
+- Preserve user data safely across migrations (library, history, reading progress, installed sources).
+- Prepare a stable daily-reading release candidate for Android and iOS.
+
 ## Building
 
 ### Android
