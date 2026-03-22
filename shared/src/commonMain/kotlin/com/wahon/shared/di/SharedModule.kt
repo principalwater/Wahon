@@ -7,9 +7,11 @@ import com.wahon.shared.data.local.WahonDatabaseFactory
 import com.wahon.shared.data.repository.ExtensionManager
 import com.wahon.shared.data.repository.ExtensionRuntimeRepositoryImpl
 import com.wahon.shared.data.repository.ExtensionRepoRepositoryImpl
+import com.wahon.shared.data.repository.ReaderProgressRepositoryImpl
 import com.wahon.shared.data.repository.SourceManager
 import com.wahon.shared.domain.repository.ExtensionRuntimeRepository
 import com.wahon.shared.domain.repository.ExtensionRepoRepository
+import com.wahon.shared.domain.repository.ReaderProgressRepository
 import org.koin.dsl.module
 
 val sharedModule = module {
@@ -21,5 +23,6 @@ val sharedModule = module {
     single { SourceManager() }
     single<ExtensionRepoRepository> { ExtensionRepoRepositoryImpl(get(), get(), get(), get()) }
     single<ExtensionRuntimeRepository> { ExtensionRuntimeRepositoryImpl(get(), get(), get()) }
+    single<ReaderProgressRepository> { ReaderProgressRepositoryImpl(get()) }
     single { ExtensionManager(get()) }
 }

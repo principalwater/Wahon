@@ -6,8 +6,11 @@ import com.wahon.extension.ChapterInfo
 import com.wahon.extension.Filter
 import com.wahon.extension.MangaInfo
 import com.wahon.extension.PageInfo
+import com.wahon.shared.domain.model.ChapterProgress
 import com.wahon.shared.domain.model.LoadedSource
+import com.wahon.shared.domain.model.MangaLastRead
 import com.wahon.shared.domain.repository.ExtensionRuntimeRepository
+import com.wahon.shared.domain.repository.ReaderProgressRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,6 +20,7 @@ import kotlinx.coroutines.launch
 
 class SourcesScreenModel(
     private val extensionRuntimeRepository: ExtensionRuntimeRepository,
+    private val readerProgressRepository: ReaderProgressRepository,
 ) : ScreenModel {
 
     private val _state = MutableStateFlow(SourcesUiState())
@@ -50,9 +54,13 @@ class SourcesScreenModel(
                             chapters = emptyList(),
                             isLoadingMangaDetails = false,
                             mangaDetailsError = null,
+                            chapterProgressByUrl = emptyMap(),
+                            mangaLastRead = null,
                             chapterPages = emptyList(),
                             isLoadingChapterPages = false,
                             chapterPagesError = null,
+                            chapterResumePage = 0,
+                            currentVisiblePage = 0,
                         )
                     }
                 }
@@ -97,9 +105,13 @@ class SourcesScreenModel(
                 chapters = emptyList(),
                 isLoadingMangaDetails = false,
                 mangaDetailsError = null,
+                chapterProgressByUrl = emptyMap(),
+                mangaLastRead = null,
                 chapterPages = emptyList(),
                 isLoadingChapterPages = false,
                 chapterPagesError = null,
+                chapterResumePage = 0,
+                currentVisiblePage = 0,
             )
         }
         if (source.isRuntimeExecutable) {
@@ -125,9 +137,13 @@ class SourcesScreenModel(
                 chapters = emptyList(),
                 isLoadingMangaDetails = false,
                 mangaDetailsError = null,
+                chapterProgressByUrl = emptyMap(),
+                mangaLastRead = null,
                 chapterPages = emptyList(),
                 isLoadingChapterPages = false,
                 chapterPagesError = null,
+                chapterResumePage = 0,
+                currentVisiblePage = 0,
             )
         }
     }
@@ -209,9 +225,13 @@ class SourcesScreenModel(
                 chapters = emptyList(),
                 isLoadingMangaDetails = true,
                 mangaDetailsError = null,
+                chapterProgressByUrl = emptyMap(),
+                mangaLastRead = null,
                 chapterPages = emptyList(),
                 isLoadingChapterPages = false,
                 chapterPagesError = null,
+                chapterResumePage = 0,
+                currentVisiblePage = 0,
             )
         }
 
@@ -225,11 +245,24 @@ class SourcesScreenModel(
                 mangaUrl = mangaUrl,
             )
 
+            val chapters = chaptersResult.getOrNull().orEmpty()
+            val chapterProgressByUrl = runCatching {
+                readerProgressRepository.getChapterProgressMap(
+                    sourceId = sourceId,
+                    chapterUrls = chapters.map { chapter -> chapter.url },
+                )
+            }.getOrElse { emptyMap() }
+            val mangaLastRead = runCatching {
+                readerProgressRepository.getMangaLastRead(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+            }.getOrNull()
+
             _state.update { current ->
                 if (current.selectedMangaUrl != mangaUrl) return@update current
 
                 val details = detailsResult.getOrNull()
-                val chapters = chaptersResult.getOrNull().orEmpty()
                 val errors = buildList {
                     detailsResult.exceptionOrNull()?.message?.let { add(it) }
                     chaptersResult.exceptionOrNull()?.message?.let { add(it) }
@@ -240,6 +273,8 @@ class SourcesScreenModel(
                     chapters = chapters,
                     isLoadingMangaDetails = false,
                     mangaDetailsError = if (errors.isEmpty()) null else errors.joinToString(separator = "\n"),
+                    chapterProgressByUrl = chapterProgressByUrl,
+                    mangaLastRead = mangaLastRead,
                 )
             }
         }
@@ -255,36 +290,59 @@ class SourcesScreenModel(
                 chapters = emptyList(),
                 isLoadingMangaDetails = false,
                 mangaDetailsError = null,
+                chapterProgressByUrl = emptyMap(),
+                mangaLastRead = null,
                 chapterPages = emptyList(),
                 isLoadingChapterPages = false,
                 chapterPagesError = null,
+                chapterResumePage = 0,
+                currentVisiblePage = 0,
             )
         }
     }
 
     fun openChapter(chapter: ChapterInfo) {
         val sourceId = _state.value.selectedSourceId ?: return
-        _state.update {
-            it.copy(
-                selectedChapterUrl = chapter.url,
-                selectedChapterName = chapter.name,
-                chapterPages = emptyList(),
-                isLoadingChapterPages = true,
-                chapterPagesError = null,
-            )
-        }
 
         screenModelScope.launch {
+            val savedProgress = _state.value.chapterProgressByUrl[chapter.url]
+                ?: readerProgressRepository.getChapterProgress(
+                    sourceId = sourceId,
+                    chapterUrl = chapter.url,
+                )
+
+            val resumePage = if (savedProgress == null) {
+                0
+            } else {
+                val maxSavedPage = (savedProgress.totalPages - 1).coerceAtLeast(0)
+                savedProgress.lastPageRead.coerceIn(0, maxSavedPage)
+            }
+
+            _state.update {
+                it.copy(
+                    selectedChapterUrl = chapter.url,
+                    selectedChapterName = chapter.name,
+                    chapterPages = emptyList(),
+                    isLoadingChapterPages = true,
+                    chapterPagesError = null,
+                    chapterResumePage = resumePage,
+                    currentVisiblePage = resumePage,
+                )
+            }
+
             extensionRuntimeRepository.getPageList(
                 extensionId = sourceId,
                 chapterUrl = chapter.url,
             ).onSuccess { pages ->
                 _state.update { current ->
                     if (current.selectedChapterUrl != chapter.url) return@update current
+                    val normalizedResume = if (pages.isEmpty()) 0 else current.chapterResumePage.coerceIn(0, pages.lastIndex)
                     current.copy(
                         chapterPages = pages,
                         isLoadingChapterPages = false,
                         chapterPagesError = null,
+                        chapterResumePage = normalizedResume,
+                        currentVisiblePage = normalizedResume,
                     )
                 }
             }.onFailure { error ->
@@ -300,7 +358,20 @@ class SourcesScreenModel(
         }
     }
 
+    fun onChapterVisiblePageChanged(pageIndex: Int) {
+        _state.update { current ->
+            if (current.selectedChapterUrl == null) return@update current
+            val normalized = pageIndex.coerceAtLeast(0)
+            if (current.currentVisiblePage == normalized) current else current.copy(currentVisiblePage = normalized)
+        }
+    }
+
     fun closeChapterReader() {
+        val snapshot = _state.value
+        screenModelScope.launch {
+            persistChapterProgress(snapshot)
+        }
+
         _state.update {
             it.copy(
                 selectedChapterUrl = null,
@@ -308,6 +379,50 @@ class SourcesScreenModel(
                 chapterPages = emptyList(),
                 isLoadingChapterPages = false,
                 chapterPagesError = null,
+                chapterResumePage = 0,
+                currentVisiblePage = 0,
+            )
+        }
+    }
+
+    private suspend fun persistChapterProgress(snapshot: SourcesUiState) {
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+        val chapterUrl = snapshot.selectedChapterUrl ?: return
+        val chapterName = snapshot.selectedChapterName ?: "Chapter"
+        val totalPages = snapshot.chapterPages.size
+        if (totalPages <= 0) return
+
+        val clampedPage = snapshot.currentVisiblePage.coerceIn(0, totalPages - 1)
+        val completed = clampedPage >= totalPages - 1
+
+        readerProgressRepository.saveChapterProgress(
+            sourceId = sourceId,
+            mangaUrl = mangaUrl,
+            chapterUrl = chapterUrl,
+            chapterName = chapterName,
+            lastPageRead = clampedPage,
+            totalPages = totalPages,
+            completed = completed,
+        )
+
+        val refreshedProgress = readerProgressRepository.getChapterProgress(
+            sourceId = sourceId,
+            chapterUrl = chapterUrl,
+        )
+        val refreshedLastRead = readerProgressRepository.getMangaLastRead(
+            sourceId = sourceId,
+            mangaUrl = mangaUrl,
+        )
+
+        _state.update { current ->
+            current.copy(
+                chapterProgressByUrl = if (refreshedProgress == null) {
+                    current.chapterProgressByUrl
+                } else {
+                    current.chapterProgressByUrl + (chapterUrl to refreshedProgress)
+                },
+                mangaLastRead = refreshedLastRead ?: current.mangaLastRead,
             )
         }
     }
@@ -407,9 +522,13 @@ data class SourcesUiState(
     val chapters: List<ChapterInfo> = emptyList(),
     val isLoadingMangaDetails: Boolean = false,
     val mangaDetailsError: String? = null,
+    val chapterProgressByUrl: Map<String, ChapterProgress> = emptyMap(),
+    val mangaLastRead: MangaLastRead? = null,
     val chapterPages: List<PageInfo> = emptyList(),
     val isLoadingChapterPages: Boolean = false,
     val chapterPagesError: String? = null,
+    val chapterResumePage: Int = 0,
+    val currentVisiblePage: Int = 0,
 ) {
     val selectedSource: LoadedSource?
         get() = selectedSourceId?.let { selectedId ->

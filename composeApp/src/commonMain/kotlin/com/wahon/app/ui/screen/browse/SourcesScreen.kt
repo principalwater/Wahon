@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -18,8 +19,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,8 +33,10 @@ import coil3.compose.AsyncImage
 import com.wahon.extension.ChapterInfo
 import com.wahon.extension.MangaInfo
 import com.wahon.extension.PageInfo
+import com.wahon.shared.domain.model.ChapterProgress
 import com.wahon.shared.domain.model.LoadedSource
 import com.wahon.shared.domain.model.SourceRuntimeKind
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun SourcesScreen(
@@ -54,6 +59,7 @@ fun SourcesScreen(
                             source = selectedSource,
                             state = state,
                             onBack = screenModel::closeChapterReader,
+                            onVisiblePageChanged = screenModel::onChapterVisiblePageChanged,
                         )
                     }
 
@@ -466,6 +472,14 @@ private fun MangaDetailsContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            val mangaLastRead = state.mangaLastRead
+            if (mangaLastRead != null) {
+                Text(
+                    text = "Last read: ${mangaLastRead.chapterName} (page ${mangaLastRead.lastPageRead + 1})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
             if (manga.description.isNotBlank()) {
                 Text(
                     text = manga.description,
@@ -500,6 +514,7 @@ private fun MangaDetailsContent(
             ) { chapter ->
                 ChapterItem(
                     chapter = chapter,
+                    progress = state.chapterProgressByUrl[chapter.url],
                     onRead = { onOpenChapter(chapter) },
                 )
             }
@@ -510,6 +525,7 @@ private fun MangaDetailsContent(
 @Composable
 private fun ChapterItem(
     chapter: ChapterInfo,
+    progress: ChapterProgress?,
     onRead: () -> Unit,
 ) {
     Surface(
@@ -533,6 +549,21 @@ private fun ChapterItem(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (progress != null) {
+                val total = progress.totalPages.coerceAtLeast(1)
+                val percent = ((progress.lastPageRead + 1) * 100) / total
+                Text(
+                    text = if (progress.completed) {
+                        "Progress: completed"
+                    } else {
+                        "Progress: page ${progress.lastPageRead + 1}/$total ($percent%)"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+
             OutlinedButton(onClick = onRead) {
                 Text("Read")
             }
@@ -545,6 +576,7 @@ private fun ChapterReaderContent(
     source: LoadedSource,
     state: SourcesUiState,
     onBack: () -> Unit,
+    onVisiblePageChanged: (Int) -> Unit,
 ) {
     val chapterName = state.selectedChapterName
 
@@ -600,8 +632,28 @@ private fun ChapterReaderContent(
             return
         }
 
+        val listState = rememberLazyListState(
+            initialFirstVisibleItemIndex = state.chapterResumePage,
+        )
+
+        LaunchedEffect(state.selectedChapterUrl) {
+            snapshotFlow { listState.firstVisibleItemIndex }
+                .distinctUntilChanged()
+                .collect { pageIndex ->
+                    onVisiblePageChanged(pageIndex)
+                }
+        }
+
+        Text(
+            text = "Reading page: ${state.currentVisiblePage + 1}/${state.chapterPages.size}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            state = listState,
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(
