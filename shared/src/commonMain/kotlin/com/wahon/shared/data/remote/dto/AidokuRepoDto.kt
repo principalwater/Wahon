@@ -19,8 +19,13 @@ data class SourceEntryDto(
     val name: String,
     val version: Int = 1,
     @SerialName("iconURL") val iconUrl: String = "",
+    @SerialName("icon") val legacyIcon: String = "",
     @SerialName("downloadURL") val downloadUrl: String = "",
+    @SerialName("file") val legacyFile: String = "",
     val languages: List<String> = emptyList(),
+    @SerialName("lang") val legacyLanguage: String = "",
     val contentRating: Int = 0,
+    val nsfw: Int? = null,
     @SerialName("baseURL") val baseUrl: String = "",
+    @SerialName("url") val legacyBaseUrl: String = "",
 )

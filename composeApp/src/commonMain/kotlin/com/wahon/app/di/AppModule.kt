@@ -1,6 +1,7 @@
 package com.wahon.app.di
 
 import com.wahon.app.ui.screen.browse.ExtensionsScreenModel
+import com.wahon.app.ui.screen.browse.SourcesScreenModel
 import com.wahon.app.ui.screen.more.ExtensionRepoScreenModel
 import com.wahon.shared.di.platformModule
 import com.wahon.shared.di.sharedModule
@@ -16,5 +17,6 @@ fun initKoin(appDeclaration: KoinApplication.() -> Unit = {}) =
 
 val appModule = module {
     factory { ExtensionsScreenModel(get(), get()) }
+    factory { SourcesScreenModel(get()) }
     factory { ExtensionRepoScreenModel(get()) }
 }

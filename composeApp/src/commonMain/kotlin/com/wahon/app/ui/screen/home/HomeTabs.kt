@@ -21,6 +21,7 @@ import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 import com.wahon.app.ui.screen.browse.BrowseScreen
 import com.wahon.app.ui.screen.browse.ExtensionsScreenModel
+import com.wahon.app.ui.screen.browse.SourcesScreenModel
 import com.wahon.app.ui.screen.more.MoreScreenWrapper
 
 object LibraryTab : Tab {
@@ -83,8 +84,12 @@ object BrowseTab : Tab {
 
     @Composable
     override fun Content() {
+        val sourcesScreenModel = koinScreenModel<SourcesScreenModel>()
         val extensionsScreenModel = koinScreenModel<ExtensionsScreenModel>()
-        BrowseScreen(extensionsScreenModel = extensionsScreenModel)
+        BrowseScreen(
+            sourcesScreenModel = sourcesScreenModel,
+            extensionsScreenModel = extensionsScreenModel,
+        )
     }
 }
 

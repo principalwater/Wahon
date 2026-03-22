@@ -12,15 +12,34 @@ fun SourceListDto.toExtensionRepo(url: String): ExtensionRepo {
 
 fun SourceEntryDto.toExtensionInfo(repoBaseUrl: String): ExtensionInfo {
     val base = repoBaseUrl.trimEnd('/')
+    val resolvedIcon = firstNotBlank(iconUrl, legacyIcon)
+    val resolvedDownload = firstNotBlank(downloadUrl, legacyFile)
+    val resolvedBaseUrl = firstNotBlank(baseUrl, legacyBaseUrl)
+    val resolvedLanguages = when {
+        languages.isNotEmpty() -> languages
+        legacyLanguage.isNotBlank() -> listOf(legacyLanguage)
+        else -> emptyList()
+    }
+    val resolvedContentRating = nsfw ?: contentRating
+
     return ExtensionInfo(
         id = id,
         name = name,
         version = version,
-        iconUrl = if (iconUrl.startsWith("http")) iconUrl else "$base/$iconUrl",
-        downloadUrl = if (downloadUrl.startsWith("http")) downloadUrl else "$base/$downloadUrl",
-        languages = languages,
-        nsfw = contentRating >= 2,
-        baseUrl = baseUrl,
+        iconUrl = resolvedIcon.toAbsoluteUrl(base),
+        downloadUrl = resolvedDownload.toAbsoluteUrl(base),
+        languages = resolvedLanguages,
+        nsfw = resolvedContentRating >= 2,
+        baseUrl = resolvedBaseUrl,
         repoUrl = repoBaseUrl,
     )
+}
+
+private fun firstNotBlank(primary: String, fallback: String): String {
+    return primary.takeIf { it.isNotBlank() } ?: fallback
+}
+
+private fun String.toAbsoluteUrl(repoBaseUrl: String): String {
+    if (isBlank()) return ""
+    return if (startsWith("http://") || startsWith("https://")) this else "$repoBaseUrl/$this"
 }
