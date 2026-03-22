@@ -33,6 +33,15 @@ A free and open source cross-platform manga reader built with Kotlin Multiplatfo
 
 Open `iosApp/iosApp.xcodeproj` in Xcode and build.
 
+## Contributing
+
+Wahon is in active beta, and core architecture/runtime work is still moving fast.
+Before implementing large features, open an issue or discussion so we can align on direction and avoid duplicate work.
+
+By submitting a contribution, you agree to the project [Contributor License Agreement](CLA.md).
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow, development expectations, and review policy.
+
 ## Disclaimer
 
 The developer(s) of this application does not have any affiliation with the
@@ -41,4 +50,6 @@ content providers available, and this application hosts zero content. See
 
 ## License
 
-[Apache License 2.0](LICENSE)
+- App source code is licensed under [GNU GPL v3.0](LICENSE).
+- Contributions require agreement with the project [CLA](CLA.md).
+- Translation assets are licensed separately under [Apache License 2.0](licenses/LICENSE-TRANSLATIONS-APACHE-2.0.txt).

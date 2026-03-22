@@ -26,6 +26,9 @@ local.properties
 /platform-tools/
 /platforms/
 /licenses/
+!/licenses/
+!/licenses/README.md
+!/licenses/LICENSE-TRANSLATIONS-APACHE-2.0.txt
 
 # iOS / Xcode
 iosApp/iosApp.xcodeproj/project.xcworkspace/
