@@ -76,3 +76,7 @@ sqldelight {
         }
     }
 }
+
+tasks.named("check").configure {
+    dependsOn("verifyCommonMainWahonDatabaseMigration")
+}

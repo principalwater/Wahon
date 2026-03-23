@@ -18,11 +18,19 @@ import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import cafe.adriel.voyager.koin.koinScreenModel
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.tab.Tab
+import cafe.adriel.voyager.navigator.tab.LocalTabNavigator
 import cafe.adriel.voyager.navigator.tab.TabOptions
+import com.wahon.app.navigation.BrowseOpenOrigin
 import com.wahon.app.ui.screen.browse.BrowseScreen
 import com.wahon.app.ui.screen.browse.ExtensionsScreenModel
 import com.wahon.app.ui.screen.browse.SourcesScreenModel
+import com.wahon.app.ui.screen.history.HistoryScreen
+import com.wahon.app.ui.screen.history.HistoryScreenModel
+import com.wahon.app.ui.screen.library.LibraryScreen
+import com.wahon.app.ui.screen.library.LibraryScreenModel
 import com.wahon.app.ui.screen.more.MoreScreenWrapper
+import com.wahon.app.ui.screen.updates.UpdatesScreen
+import com.wahon.app.ui.screen.updates.UpdatesScreenModel
 
 object LibraryTab : Tab {
     private fun readResolve(): Any = LibraryTab
@@ -36,7 +44,12 @@ object LibraryTab : Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderScreen("Library")
+        val libraryScreenModel = koinScreenModel<LibraryScreenModel>()
+        val tabNavigator = LocalTabNavigator.current
+        LibraryScreen(
+            screenModel = libraryScreenModel,
+            onNavigateToBrowse = { tabNavigator.current = BrowseTab },
+        )
     }
 }
 
@@ -52,7 +65,12 @@ object UpdatesTab : Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderScreen("Updates")
+        val updatesScreenModel = koinScreenModel<UpdatesScreenModel>()
+        val tabNavigator = LocalTabNavigator.current
+        UpdatesScreen(
+            screenModel = updatesScreenModel,
+            onNavigateToBrowse = { tabNavigator.current = BrowseTab },
+        )
     }
 }
 
@@ -68,7 +86,12 @@ object HistoryTab : Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderScreen("History")
+        val historyScreenModel = koinScreenModel<HistoryScreenModel>()
+        val tabNavigator = LocalTabNavigator.current
+        HistoryScreen(
+            screenModel = historyScreenModel,
+            onNavigateToBrowse = { tabNavigator.current = BrowseTab },
+        )
     }
 }
 
@@ -86,9 +109,18 @@ object BrowseTab : Tab {
     override fun Content() {
         val sourcesScreenModel = koinScreenModel<SourcesScreenModel>()
         val extensionsScreenModel = koinScreenModel<ExtensionsScreenModel>()
+        val tabNavigator = LocalTabNavigator.current
         BrowseScreen(
             sourcesScreenModel = sourcesScreenModel,
             extensionsScreenModel = extensionsScreenModel,
+            onNavigateToOrigin = { origin ->
+                tabNavigator.current = when (origin) {
+                    BrowseOpenOrigin.BROWSE -> BrowseTab
+                    BrowseOpenOrigin.LIBRARY -> LibraryTab
+                    BrowseOpenOrigin.UPDATES -> UpdatesTab
+                    BrowseOpenOrigin.HISTORY -> HistoryTab
+                }
+            },
         )
     }
 }

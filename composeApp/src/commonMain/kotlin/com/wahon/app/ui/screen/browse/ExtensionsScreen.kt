@@ -6,10 +6,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -41,6 +43,33 @@ fun ExtensionsScreen(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )
+
+            val languageFilters = buildList {
+                add(ALL_LANGUAGES_KEY)
+                addAll(state.availableLanguages)
+            }
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+            ) {
+                items(languageFilters, key = { it }) { language ->
+                    FilterChip(
+                        selected = state.selectedLanguage == language,
+                        onClick = { screenModel.onLanguageFilterChange(language) },
+                        label = {
+                            Text(
+                                if (language == ALL_LANGUAGES_KEY) {
+                                    "All"
+                                } else {
+                                    language.uppercase()
+                                },
+                            )
+                        },
+                        modifier = Modifier.padding(end = 8.dp, bottom = 8.dp),
+                    )
+                }
+            }
 
             when {
                 state.isLoading -> {

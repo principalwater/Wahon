@@ -9,6 +9,13 @@ interface MangaRepository {
     suspend fun getMangaById(id: String): Manga?
     suspend fun addToLibrary(manga: Manga)
     suspend fun removeFromLibrary(mangaId: String)
+    suspend fun upsertMangaWithChapters(manga: Manga, chapters: List<Chapter>)
     suspend fun getChapters(mangaId: String): List<Chapter>
-    suspend fun updateChapterProgress(chapterId: String, lastPageRead: Int, read: Boolean)
+    suspend fun updateChapterProgress(
+        chapterId: String,
+        lastPageRead: Int,
+        read: Boolean,
+        mergeWithExisting: Boolean = true,
+        trackHistory: Boolean = true,
+    )
 }

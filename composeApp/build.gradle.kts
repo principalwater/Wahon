@@ -51,6 +51,7 @@ kotlin {
             implementation(libs.koin.compose)
 
             implementation(libs.napier)
+            implementation(libs.kotlinx.datetime)
         }
 
         androidMain.dependencies {

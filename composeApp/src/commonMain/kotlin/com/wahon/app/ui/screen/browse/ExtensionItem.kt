@@ -75,10 +75,27 @@ fun ExtensionItem(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            val packageHint = extension.packageHint()
+            if (packageHint != null) {
+                Text(
+                    text = packageHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
 
         OutlinedButton(onClick = onInstallClick) {
             Text(if (extension.installed) "Uninstall" else "Install")
         }
+    }
+}
+
+private fun ExtensionInfo.packageHint(): String? {
+    val normalized = downloadUrl.substringBefore('?').lowercase()
+    return when {
+        normalized.endsWith(".aix") -> "Package: AIX (WASM), ABI diagnostics enabled"
+        normalized.endsWith(".js") -> "Package: JavaScript"
+        else -> null
     }
 }

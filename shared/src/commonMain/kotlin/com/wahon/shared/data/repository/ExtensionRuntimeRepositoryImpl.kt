@@ -8,6 +8,10 @@ import com.wahon.extension.MangaPage
 import com.wahon.extension.PageInfo
 import com.wahon.shared.data.local.ExtensionFileStore
 import com.wahon.shared.data.local.WahonDatabase
+import com.wahon.shared.data.repository.aix.AixSourceAdapter
+import com.wahon.shared.data.repository.aix.AixSourceAdapterRegistry
+import com.wahon.shared.data.repository.aix.AixSourceDescriptor
+import com.wahon.shared.data.repository.aix.AixWasmRuntime
 import com.wahon.shared.domain.model.LoadedSource
 import com.wahon.shared.domain.model.SourceRuntimeKind
 import com.wahon.shared.domain.repository.ExtensionRuntimeRepository
@@ -21,6 +25,8 @@ class ExtensionRuntimeRepositoryImpl(
     private val database: WahonDatabase,
     private val extensionFileStore: ExtensionFileStore,
     private val sourceManager: SourceManager,
+    private val aixSourceAdapterRegistry: AixSourceAdapterRegistry,
+    private val aixWasmRuntime: AixWasmRuntime,
 ) : ExtensionRuntimeRepository {
 
     private val json = Json {
@@ -49,20 +55,45 @@ class ExtensionRuntimeRepositoryImpl(
                 }
 
                 val initialRuntime = detectRuntime(payload)
-                val runtime = if (initialRuntime.runtimeKind == SourceRuntimeKind.JAVASCRIPT) {
-                    val script = initialRuntime.script.orEmpty()
-                    val syntaxIsValid = validateScriptSyntax(script = script)
-                    if (syntaxIsValid) {
-                        initialRuntime
-                    } else {
-                        Napier.w("Extension script validation failed: $extensionId")
-                        initialRuntime.copy(
-                            isExecutable = false,
-                            runtimeMessage = "JavaScript syntax validation failed",
-                        )
+                val runtime = when (initialRuntime.runtimeKind) {
+                    SourceRuntimeKind.JAVASCRIPT -> {
+                        val script = initialRuntime.script.orEmpty()
+                        val syntaxIsValid = validateScriptSyntax(script = script)
+                        if (syntaxIsValid) {
+                            initialRuntime
+                        } else {
+                            Napier.w("Extension script validation failed: $extensionId")
+                            initialRuntime.copy(
+                                isExecutable = false,
+                                runtimeMessage = "JavaScript syntax validation failed",
+                            )
+                        }
                     }
-                } else {
-                    initialRuntime
+
+                    SourceRuntimeKind.AIDOKU_AIX -> {
+                        val nativeAdapter = resolveAixAdapter(
+                            source = buildAixSourceDescriptor(
+                                extensionId = extensionId,
+                                declaredSourceId = initialRuntime.aixDeclaredSourceId,
+                                sourceName = row.name,
+                                baseUrl = row.base_url,
+                                language = row.languages_csv.substringBefore(',').ifBlank { "en" },
+                            ),
+                        )
+                        if (nativeAdapter != null) {
+                            initialRuntime.copy(
+                                isExecutable = true,
+                                runtimeMessage = buildAixRuntimeMessage(
+                                    baseMessage = initialRuntime.runtimeMessage,
+                                    suffix = "AIX compatibility adapter: ${nativeAdapter.adapterId}",
+                                ),
+                            )
+                        } else {
+                            initialRuntime
+                        }
+                    }
+
+                    SourceRuntimeKind.UNKNOWN -> initialRuntime
                 }
 
                 loaded += LoadedSource(
@@ -89,10 +120,16 @@ class ExtensionRuntimeRepositoryImpl(
     }
 
     override suspend fun getPopularManga(extensionId: String, page: Int): Result<MangaPage> {
-        return executeSourceMethod(
+        return executeRuntimeMethod(
             extensionId = extensionId,
             methodName = "getPopularManga",
-            argsJson = listOf(page.toString()),
+            jsArgsJson = listOf(page.toString()),
+            aixBlock = { adapter, source ->
+                adapter.getPopularManga(
+                    source = source,
+                    page = page,
+                )
+            },
         )
     }
 
@@ -102,14 +139,22 @@ class ExtensionRuntimeRepositoryImpl(
         page: Int,
         filters: List<Filter>,
     ): Result<MangaPage> {
-        return executeSourceMethod(
+        return executeRuntimeMethod(
             extensionId = extensionId,
             methodName = "searchManga",
-            argsJson = listOf(
+            jsArgsJson = listOf(
                 json.encodeToString(query),
                 page.toString(),
                 json.encodeToString(filters),
             ),
+            aixBlock = { adapter, source ->
+                adapter.searchManga(
+                    source = source,
+                    query = query,
+                    page = page,
+                    filters = filters,
+                )
+            },
         )
     }
 
@@ -117,10 +162,16 @@ class ExtensionRuntimeRepositoryImpl(
         extensionId: String,
         mangaUrl: String,
     ): Result<MangaInfo> {
-        return executeSourceMethod(
+        return executeRuntimeMethod(
             extensionId = extensionId,
             methodName = "getMangaDetails",
-            argsJson = listOf(json.encodeToString(mangaUrl)),
+            jsArgsJson = listOf(json.encodeToString(mangaUrl)),
+            aixBlock = { adapter, source ->
+                adapter.getMangaDetails(
+                    source = source,
+                    mangaUrl = mangaUrl,
+                )
+            },
         )
     }
 
@@ -128,10 +179,16 @@ class ExtensionRuntimeRepositoryImpl(
         extensionId: String,
         mangaUrl: String,
     ): Result<List<ChapterInfo>> {
-        return executeSourceMethod(
+        return executeRuntimeMethod(
             extensionId = extensionId,
             methodName = "getChapterList",
-            argsJson = listOf(json.encodeToString(mangaUrl)),
+            jsArgsJson = listOf(json.encodeToString(mangaUrl)),
+            aixBlock = { adapter, source ->
+                adapter.getChapterList(
+                    source = source,
+                    mangaUrl = mangaUrl,
+                )
+            },
         )
     }
 
@@ -139,10 +196,16 @@ class ExtensionRuntimeRepositoryImpl(
         extensionId: String,
         chapterUrl: String,
     ): Result<List<PageInfo>> {
-        return executeSourceMethod(
+        return executeRuntimeMethod(
             extensionId = extensionId,
             methodName = "getPageList",
-            argsJson = listOf(json.encodeToString(chapterUrl)),
+            jsArgsJson = listOf(json.encodeToString(chapterUrl)),
+            aixBlock = { adapter, source ->
+                adapter.getPageList(
+                    source = source,
+                    chapterUrl = chapterUrl,
+                )
+            },
         )
     }
 
@@ -154,44 +217,96 @@ class ExtensionRuntimeRepositoryImpl(
         }.isSuccess
     }
 
-    private suspend inline fun <reified T> executeSourceMethod(
+    private suspend inline fun <reified T> executeRuntimeMethod(
         extensionId: String,
         methodName: String,
-        argsJson: List<String>,
+        jsArgsJson: List<String>,
+        crossinline aixBlock: suspend (AixSourceAdapter, AixSourceDescriptor) -> T,
     ): Result<T> {
         return runCatching {
             val loadedSource = sourceManager.get(extensionId)
                 ?: error("Source is not loaded: $extensionId")
-            if (!loadedSource.isRuntimeExecutable || loadedSource.runtimeKind != SourceRuntimeKind.JAVASCRIPT) {
+
+            if (!loadedSource.isRuntimeExecutable) {
                 val reason = loadedSource.runtimeMessage ?: "Runtime ${loadedSource.runtimeKind} is not executable"
                 error("Source $extensionId cannot run method $methodName: $reason")
             }
 
-            val payload = extensionFileStore.readExtension(extensionId)
-                ?: error("Extension payload not found: $extensionId")
-            val runtime = detectRuntime(payload)
-            if (runtime.runtimeKind != SourceRuntimeKind.JAVASCRIPT || !runtime.isExecutable) {
-                error("Source $extensionId runtime is ${runtime.runtimeKind} and cannot execute methods")
-            }
-            val sourceScript = runtime.script
-                ?: error("JavaScript runtime script is missing for source: $extensionId")
+            when (loadedSource.runtimeKind) {
+                SourceRuntimeKind.JAVASCRIPT -> executeJavaScriptMethod(
+                    extensionId = extensionId,
+                    methodName = methodName,
+                    argsJson = jsArgsJson,
+                )
 
-            val invocationScript = buildMethodInvocationScript(
-                methodName = methodName,
-                argsJson = argsJson,
-            )
-            val executableScript = buildExecutableScript(
-                sourceScript = sourceScript,
-                invocationScript = invocationScript,
-            )
-            val resultJson: String = quickJs {
-                evaluate<String>(executableScript)
+                SourceRuntimeKind.AIDOKU_AIX -> {
+                    val payload = extensionFileStore.readExtension(extensionId)
+                        ?: error("Extension payload not found: $extensionId")
+                    val runtime = detectRuntime(payload)
+                    val sourceDescriptor = buildAixSourceDescriptor(
+                        extensionId = extensionId,
+                        declaredSourceId = runtime.aixDeclaredSourceId,
+                        sourceName = loadedSource.name,
+                        baseUrl = loadedSource.baseUrl,
+                        language = loadedSource.language,
+                    )
+
+                    val adapter = resolveAixAdapter(
+                        source = sourceDescriptor,
+                    )
+                    if (adapter != null) {
+                        aixBlock(adapter, sourceDescriptor)
+                    } else {
+                        val resultJson = aixWasmRuntime.executeMethod(
+                            extensionId = extensionId,
+                            payload = payload,
+                            methodName = methodName,
+                            argsJson = jsArgsJson,
+                        )
+                        if (resultJson == "null") {
+                            error("Source method returned null: $methodName")
+                        }
+                        json.decodeFromString(resultJson)
+                    }
+                }
+
+                SourceRuntimeKind.UNKNOWN -> {
+                    val reason = loadedSource.runtimeMessage ?: "Unknown runtime"
+                    error("Source $extensionId cannot run method $methodName: $reason")
+                }
             }
-            if (resultJson == "null") {
-                error("Source method returned null: $methodName")
-            }
-            json.decodeFromString<T>(resultJson)
         }
+    }
+
+    private suspend inline fun <reified T> executeJavaScriptMethod(
+        extensionId: String,
+        methodName: String,
+        argsJson: List<String>,
+    ): T {
+        val payload = extensionFileStore.readExtension(extensionId)
+            ?: error("Extension payload not found: $extensionId")
+        val runtime = detectRuntime(payload)
+        if (runtime.runtimeKind != SourceRuntimeKind.JAVASCRIPT || !runtime.isExecutable) {
+            error("Source $extensionId runtime is ${runtime.runtimeKind} and cannot execute methods")
+        }
+        val sourceScript = runtime.script
+            ?: error("JavaScript runtime script is missing for source: $extensionId")
+
+        val invocationScript = buildMethodInvocationScript(
+            methodName = methodName,
+            argsJson = argsJson,
+        )
+        val executableScript = buildExecutableScript(
+            sourceScript = sourceScript,
+            invocationScript = invocationScript,
+        )
+        val resultJson: String = quickJs {
+            evaluate<String>(executableScript)
+        }
+        if (resultJson == "null") {
+            error("Source method returned null: $methodName")
+        }
+        return json.decodeFromString(resultJson)
     }
 
     private fun detectRuntime(payload: ByteArray): RuntimeInspection {
@@ -203,11 +318,13 @@ class ExtensionRuntimeRepositoryImpl(
             )
         }
 
-        if (isZipArchive(payload)) {
+        val aixInspection = aixWasmRuntime.inspect(payload)
+        if (aixInspection.isAixPackage) {
             return RuntimeInspection(
                 runtimeKind = SourceRuntimeKind.AIDOKU_AIX,
-                isExecutable = false,
-                runtimeMessage = "Aidoku .aix package detected (WASM runtime is not implemented yet)",
+                isExecutable = aixInspection.isExecutable,
+                runtimeMessage = aixInspection.runtimeMessage,
+                aixDeclaredSourceId = aixInspection.declaredSourceId,
             )
         }
 
@@ -217,6 +334,14 @@ class ExtensionRuntimeRepositoryImpl(
                 runtimeKind = SourceRuntimeKind.UNKNOWN,
                 isExecutable = false,
                 runtimeMessage = "Extension payload is not readable text",
+            )
+        }
+
+        if (decoded.startsWith("404: Not Found", ignoreCase = true)) {
+            return RuntimeInspection(
+                runtimeKind = SourceRuntimeKind.UNKNOWN,
+                isExecutable = false,
+                runtimeMessage = "Extension artifact was not found (HTTP 404). Reinstall from a valid repository.",
             )
         }
 
@@ -239,12 +364,34 @@ class ExtensionRuntimeRepositoryImpl(
         )
     }
 
-    private fun isZipArchive(payload: ByteArray): Boolean {
-        if (payload.size < 4) return false
-        return payload[0] == ZIP_SIGNATURE_1 &&
-            payload[1] == ZIP_SIGNATURE_2 &&
-            payload[2] == ZIP_SIGNATURE_3 &&
-            payload[3] == ZIP_SIGNATURE_4
+    private fun resolveAixAdapter(
+        source: AixSourceDescriptor,
+    ): AixSourceAdapter? {
+        return aixSourceAdapterRegistry.find(source)
+    }
+
+    private fun buildAixSourceDescriptor(
+        extensionId: String,
+        declaredSourceId: String?,
+        sourceName: String,
+        baseUrl: String,
+        language: String,
+    ): AixSourceDescriptor {
+        return AixSourceDescriptor(
+            extensionId = extensionId,
+            declaredSourceId = declaredSourceId,
+            sourceName = sourceName,
+            baseUrl = baseUrl,
+            language = language,
+        )
+    }
+
+    private fun buildAixRuntimeMessage(
+        baseMessage: String?,
+        suffix: String,
+    ): String {
+        if (baseMessage.isNullOrBlank()) return suffix
+        return "$baseMessage\n$suffix"
     }
 
     private fun buildMethodInvocationScript(
@@ -284,13 +431,10 @@ class ExtensionRuntimeRepositoryImpl(
         val script: String? = null,
         val isExecutable: Boolean,
         val runtimeMessage: String? = null,
+        val aixDeclaredSourceId: String? = null,
     )
 
     private companion object {
         private const val MIN_PRINTABLE_RATIO = 0.70
-        private const val ZIP_SIGNATURE_1: Byte = 0x50
-        private const val ZIP_SIGNATURE_2: Byte = 0x4B
-        private const val ZIP_SIGNATURE_3: Byte = 0x03
-        private const val ZIP_SIGNATURE_4: Byte = 0x04
     }
 }

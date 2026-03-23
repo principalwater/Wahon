@@ -2,14 +2,24 @@ package com.wahon.app.ui.screen.browse
 
 import cafe.adriel.voyager.core.model.ScreenModel
 import cafe.adriel.voyager.core.model.screenModelScope
+import com.wahon.app.navigation.BrowseOpenRequest
+import com.wahon.app.navigation.BrowseOpenOrigin
+import com.wahon.app.navigation.BrowseOpenRequestBus
 import com.wahon.extension.ChapterInfo
 import com.wahon.extension.Filter
 import com.wahon.extension.MangaInfo
 import com.wahon.extension.PageInfo
+import com.wahon.shared.domain.model.Chapter
 import com.wahon.shared.domain.model.ChapterProgress
 import com.wahon.shared.domain.model.LoadedSource
+import com.wahon.shared.domain.model.Manga
 import com.wahon.shared.domain.model.MangaLastRead
+import com.wahon.shared.domain.model.MangaStatus
+import com.wahon.shared.domain.model.buildChapterId
+import com.wahon.shared.domain.model.buildMangaId
 import com.wahon.shared.domain.repository.ExtensionRuntimeRepository
+import com.wahon.shared.domain.repository.MangaRepository
+import com.wahon.shared.domain.repository.OfflineDownloadRepository
 import com.wahon.shared.domain.repository.ReaderProgressRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -23,6 +33,9 @@ import kotlinx.coroutines.launch
 class SourcesScreenModel(
     private val extensionRuntimeRepository: ExtensionRuntimeRepository,
     private val readerProgressRepository: ReaderProgressRepository,
+    private val mangaRepository: MangaRepository,
+    private val offlineDownloadRepository: OfflineDownloadRepository,
+    private val browseOpenRequestBus: BrowseOpenRequestBus,
 ) : ScreenModel {
 
     private var chapterProgressAutosaveJob: Job? = null
@@ -66,9 +79,29 @@ class SourcesScreenModel(
                             chapterResumePage = 0,
                             currentVisiblePage = 0,
                             lastPersistedVisiblePage = 0,
+                            isInLibrary = false,
+                            isUpdatingLibrary = false,
+                            libraryActionError = null,
+                            downloadedChapterUrls = emptySet(),
+                            downloadingChapterUrls = emptySet(),
+                            isDownloadingAllChapters = false,
+                            isAutoDownloadEnabled = false,
+                            downloadStatusMessage = null,
+                            isReadingOfflineCopy = false,
+                            openOrigin = BrowseOpenOrigin.BROWSE,
                         )
                     }
                 }
+            }
+        }
+
+        screenModelScope.launch {
+            browseOpenRequestBus.request.collectLatest { request ->
+                if (request == null) return@collectLatest
+                runCatching {
+                    handleBrowseOpenRequest(request)
+                }
+                browseOpenRequestBus.consume(request)
             }
         }
     }
@@ -91,7 +124,10 @@ class SourcesScreenModel(
         }
     }
 
-    fun openSource(extensionId: String) {
+    fun openSource(
+        extensionId: String,
+        origin: BrowseOpenOrigin = BrowseOpenOrigin.BROWSE,
+    ) {
         val source = _state.value.sources.firstOrNull { it.extensionId == extensionId } ?: return
         _state.update {
             it.copy(
@@ -118,6 +154,16 @@ class SourcesScreenModel(
                 chapterResumePage = 0,
                 currentVisiblePage = 0,
                 lastPersistedVisiblePage = 0,
+                isInLibrary = false,
+                isUpdatingLibrary = false,
+                libraryActionError = null,
+                downloadedChapterUrls = emptySet(),
+                downloadingChapterUrls = emptySet(),
+                isDownloadingAllChapters = false,
+                isAutoDownloadEnabled = false,
+                downloadStatusMessage = null,
+                isReadingOfflineCopy = false,
+                openOrigin = origin,
             )
         }
         if (source.isRuntimeExecutable) {
@@ -151,6 +197,16 @@ class SourcesScreenModel(
                 chapterResumePage = 0,
                 currentVisiblePage = 0,
                 lastPersistedVisiblePage = 0,
+                isInLibrary = false,
+                isUpdatingLibrary = false,
+                libraryActionError = null,
+                downloadedChapterUrls = emptySet(),
+                downloadingChapterUrls = emptySet(),
+                isDownloadingAllChapters = false,
+                isAutoDownloadEnabled = false,
+                downloadStatusMessage = null,
+                isReadingOfflineCopy = false,
+                openOrigin = BrowseOpenOrigin.BROWSE,
             )
         }
     }
@@ -240,10 +296,23 @@ class SourcesScreenModel(
                 chapterResumePage = 0,
                 currentVisiblePage = 0,
                 lastPersistedVisiblePage = 0,
+                isInLibrary = false,
+                isUpdatingLibrary = false,
+                libraryActionError = null,
+                downloadedChapterUrls = emptySet(),
+                downloadingChapterUrls = emptySet(),
+                isDownloadingAllChapters = false,
+                isAutoDownloadEnabled = false,
+                downloadStatusMessage = null,
+                isReadingOfflineCopy = false,
             )
         }
 
         screenModelScope.launch {
+            val mangaId = buildMangaId(sourceId = sourceId, mangaUrl = mangaUrl)
+            val isInLibrary = runCatching {
+                mangaRepository.getMangaById(mangaId)?.inLibrary == true
+            }.getOrDefault(false)
             val detailsResult = extensionRuntimeRepository.getMangaDetails(
                 extensionId = sourceId,
                 mangaUrl = mangaUrl,
@@ -266,6 +335,38 @@ class SourcesScreenModel(
                     mangaUrl = mangaUrl,
                 )
             }.getOrNull()
+            val downloadedChapterUrls = runCatching {
+                offlineDownloadRepository.getDownloadedChapterUrls(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+            }.getOrElse { emptySet() }
+            val autoDownloadEnabled = runCatching {
+                offlineDownloadRepository.isAutoDownloadEnabled(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+            }.getOrDefault(false)
+            val mangaForPersistence = detailsResult.getOrNull()
+                ?: _state.value.feedManga.firstOrNull { manga -> manga.url == mangaUrl }
+            if (mangaForPersistence != null) {
+                runCatching {
+                    mangaRepository.upsertMangaWithChapters(
+                        manga = mangaForPersistence.toDomainManga(
+                            sourceId = sourceId,
+                            mangaId = mangaId,
+                            inLibrary = isInLibrary,
+                        ),
+                        chapters = chapters.map { chapter ->
+                            chapter.toDomainChapter(
+                                sourceId = sourceId,
+                                mangaUrl = mangaUrl,
+                                progress = chapterProgressByUrl[chapter.url],
+                            )
+                        },
+                    )
+                }
+            }
 
             _state.update { current ->
                 if (current.selectedMangaUrl != mangaUrl) return@update current
@@ -283,12 +384,23 @@ class SourcesScreenModel(
                     mangaDetailsError = if (errors.isEmpty()) null else errors.joinToString(separator = "\n"),
                     chapterProgressByUrl = chapterProgressByUrl,
                     mangaLastRead = mangaLastRead,
+                    isInLibrary = isInLibrary,
+                    isUpdatingLibrary = false,
+                    libraryActionError = null,
+                    downloadedChapterUrls = downloadedChapterUrls,
+                    downloadingChapterUrls = emptySet(),
+                    isDownloadingAllChapters = false,
+                    isAutoDownloadEnabled = autoDownloadEnabled,
+                    downloadStatusMessage = null,
+                    isReadingOfflineCopy = false,
                 )
             }
         }
     }
 
-    fun closeMangaDetails() {
+    fun closeMangaDetails(): BrowseOpenOrigin? {
+        val originTarget = _state.value.openOrigin
+            .takeIf { origin -> origin != BrowseOpenOrigin.BROWSE }
         _state.update {
             it.copy(
                 selectedMangaUrl = null,
@@ -306,28 +418,418 @@ class SourcesScreenModel(
                 chapterResumePage = 0,
                 currentVisiblePage = 0,
                 lastPersistedVisiblePage = 0,
+                isInLibrary = false,
+                isUpdatingLibrary = false,
+                libraryActionError = null,
+                downloadedChapterUrls = emptySet(),
+                downloadingChapterUrls = emptySet(),
+                isDownloadingAllChapters = false,
+                isAutoDownloadEnabled = false,
+                downloadStatusMessage = null,
+                isReadingOfflineCopy = false,
+                openOrigin = BrowseOpenOrigin.BROWSE,
             )
+        }
+        return originTarget
+    }
+
+    fun toggleLibraryForCurrentManga() {
+        val snapshot = _state.value
+        if (snapshot.isUpdatingLibrary) return
+
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+        val currentlyInLibrary = snapshot.isInLibrary
+        val mangaId = buildMangaId(sourceId = sourceId, mangaUrl = mangaUrl)
+        val mangaInfo =
+            snapshot.mangaDetails ?: snapshot.feedManga.firstOrNull { manga -> manga.url == mangaUrl } ?: return
+
+        _state.update { current ->
+            current.copy(
+                isUpdatingLibrary = true,
+                libraryActionError = null,
+            )
+        }
+
+        screenModelScope.launch {
+            runCatching {
+                if (currentlyInLibrary) {
+                    mangaRepository.removeFromLibrary(mangaId)
+                } else {
+                    mangaRepository.addToLibrary(
+                        mangaInfo.toDomainManga(
+                            sourceId = sourceId,
+                            mangaId = mangaId,
+                            inLibrary = true,
+                        ),
+                    )
+                }
+            }.onSuccess {
+                _state.update { current ->
+                    current.copy(
+                        isInLibrary = !current.isInLibrary,
+                        isUpdatingLibrary = false,
+                        libraryActionError = null,
+                    )
+                }
+            }.onFailure { error ->
+                _state.update { current ->
+                    current.copy(
+                        isUpdatingLibrary = false,
+                        libraryActionError = error.message ?: "Failed to update library state",
+                    )
+                }
+            }
+        }
+    }
+
+    fun toggleAutoDownloadForCurrentManga() {
+        val snapshot = _state.value
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+        val nextValue = !snapshot.isAutoDownloadEnabled
+
+        _state.update { current ->
+            current.copy(downloadStatusMessage = null)
+        }
+
+        screenModelScope.launch {
+            runCatching {
+                offlineDownloadRepository.setAutoDownloadEnabled(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                    enabled = nextValue,
+                )
+            }.onSuccess {
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            isAutoDownloadEnabled = nextValue,
+                            downloadStatusMessage = if (nextValue) {
+                                "Auto-download enabled for this title."
+                            } else {
+                                "Auto-download disabled for this title."
+                            },
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadStatusMessage = error.message ?: "Failed to update auto-download setting",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun downloadChapter(chapter: ChapterInfo) {
+        val snapshot = _state.value
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+        if (snapshot.downloadingChapterUrls.contains(chapter.url)) return
+
+        _state.update { current ->
+            current.copy(
+                downloadingChapterUrls = current.downloadingChapterUrls + chapter.url,
+                downloadStatusMessage = null,
+            )
+        }
+
+        screenModelScope.launch {
+            val result = offlineDownloadRepository.downloadChapter(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+                chapter = chapter,
+            )
+
+            result.onFailure { error ->
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadingChapterUrls = current.downloadingChapterUrls - chapter.url,
+                            downloadStatusMessage = error.message ?: "Failed to download chapter",
+                        )
+                    }
+                }
+            }.onSuccess {
+                refreshDownloadedChapterState(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadingChapterUrls = current.downloadingChapterUrls - chapter.url,
+                            downloadStatusMessage = "Downloaded: ${chapter.name}",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun downloadAllChaptersForCurrentManga() {
+        val snapshot = _state.value
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+        val chapters = snapshot.chapters
+        if (snapshot.isDownloadingAllChapters || chapters.isEmpty()) return
+
+        _state.update { current ->
+            current.copy(
+                isDownloadingAllChapters = true,
+                downloadStatusMessage = null,
+            )
+        }
+
+        screenModelScope.launch {
+            val result = offlineDownloadRepository.downloadAllChapters(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+                chapters = chapters,
+            )
+            result.onSuccess { batch ->
+                refreshDownloadedChapterState(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            isDownloadingAllChapters = false,
+                            downloadStatusMessage = "Download complete: +${batch.downloaded}, skipped ${batch.skipped}, failed ${batch.failed}",
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            isDownloadingAllChapters = false,
+                            downloadStatusMessage = error.message ?: "Failed to download title chapters",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun removeDownloadedChapter(chapter: ChapterInfo) {
+        val snapshot = _state.value
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+
+        _state.update { current ->
+            current.copy(downloadStatusMessage = null)
+        }
+
+        screenModelScope.launch {
+            val result = offlineDownloadRepository.removeDownloadedChapter(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapter.url,
+            )
+            result.onSuccess {
+                refreshDownloadedChapterState(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadStatusMessage = "Removed offline copy: ${chapter.name}",
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadStatusMessage = error.message ?: "Failed to remove offline chapter",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun removeDownloadedForCurrentManga() {
+        val snapshot = _state.value
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+
+        _state.update { current ->
+            current.copy(downloadStatusMessage = null)
+        }
+
+        screenModelScope.launch {
+            val result = offlineDownloadRepository.removeDownloadedManga(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+            )
+            result.onSuccess { removedCount ->
+                refreshDownloadedChapterState(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadStatusMessage = if (removedCount > 0) {
+                                "Removed offline chapters: $removedCount"
+                            } else {
+                                "No offline chapters to remove"
+                            },
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                _state.update { current ->
+                    if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                        current
+                    } else {
+                        current.copy(
+                            downloadStatusMessage = error.message ?: "Failed to remove title downloads",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun setChapterReadState(chapter: ChapterInfo, read: Boolean) {
+        val snapshot = _state.value
+        val sourceId = snapshot.selectedSourceId ?: return
+        val mangaUrl = snapshot.selectedMangaUrl ?: return
+        val chapterUrl = chapter.url
+        val existingProgress = snapshot.chapterProgressByUrl[chapterUrl]
+        val totalPages = existingProgress?.totalPages?.coerceAtLeast(1) ?: 1
+        val lastPageRead = if (read) (totalPages - 1).coerceAtLeast(0) else 0
+
+        screenModelScope.launch {
+            var refreshedProgress: ChapterProgress? = null
+            var refreshedLastRead: MangaLastRead? = null
+            var lastReadCleared = false
+
+            if (read) {
+                readerProgressRepository.saveChapterProgress(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                    chapterUrl = chapterUrl,
+                    chapterName = chapter.name,
+                    lastPageRead = lastPageRead,
+                    totalPages = totalPages,
+                    completed = true,
+                    updateMangaLastRead = false,
+                )
+                refreshedProgress = readerProgressRepository.getChapterProgress(
+                    sourceId = sourceId,
+                    chapterUrl = chapterUrl,
+                )
+                refreshedLastRead = readerProgressRepository.getMangaLastRead(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+            } else {
+                readerProgressRepository.clearChapterProgress(
+                    sourceId = sourceId,
+                    chapterUrl = chapterUrl,
+                )
+                val currentLastRead = readerProgressRepository.getMangaLastRead(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                )
+                if (currentLastRead?.chapterUrl == chapterUrl) {
+                    readerProgressRepository.clearMangaLastRead(
+                        sourceId = sourceId,
+                        mangaUrl = mangaUrl,
+                    )
+                    lastReadCleared = true
+                } else {
+                    refreshedLastRead = currentLastRead
+                }
+            }
+
+            runCatching {
+                mangaRepository.updateChapterProgress(
+                    chapterId = buildChapterId(
+                        sourceId = sourceId,
+                        mangaUrl = mangaUrl,
+                        chapterUrl = chapterUrl,
+                    ),
+                    lastPageRead = lastPageRead,
+                    read = read,
+                    mergeWithExisting = false,
+                    trackHistory = false,
+                )
+            }
+
+            _state.update { current ->
+                current.copy(
+                    chapterProgressByUrl = if (read) {
+                        if (refreshedProgress == null) {
+                            current.chapterProgressByUrl - chapterUrl
+                        } else {
+                            current.chapterProgressByUrl + (chapterUrl to refreshedProgress)
+                        }
+                    } else {
+                        current.chapterProgressByUrl - chapterUrl
+                    },
+                    mangaLastRead = if (lastReadCleared) {
+                        null
+                    } else {
+                        refreshedLastRead ?: current.mangaLastRead
+                    },
+                )
+            }
         }
     }
 
     fun openChapter(chapter: ChapterInfo) {
+        openChapterInternal(chapter = chapter, forcedResumePage = null)
+    }
+
+    private fun openChapterInternal(chapter: ChapterInfo, forcedResumePage: Int?) {
         val sourceId = _state.value.selectedSourceId ?: return
         chapterProgressAutosaveJob?.cancel()
         chapterProgressAutosaveJob = null
 
         screenModelScope.launch {
+            val mangaUrl = _state.value.selectedMangaUrl ?: return@launch
             val savedProgress = _state.value.chapterProgressByUrl[chapter.url]
                 ?: readerProgressRepository.getChapterProgress(
                     sourceId = sourceId,
                     chapterUrl = chapter.url,
                 )
 
-            val resumePage = if (savedProgress == null) {
+            val progressResumePage = if (savedProgress == null) {
                 0
             } else {
                 val maxSavedPage = (savedProgress.totalPages - 1).coerceAtLeast(0)
                 savedProgress.lastPageRead.coerceIn(0, maxSavedPage)
             }
+            val resumePage = forcedResumePage?.coerceAtLeast(0) ?: progressResumePage
 
             _state.update {
                 it.copy(
@@ -339,7 +841,31 @@ class SourcesScreenModel(
                     chapterResumePage = resumePage,
                     currentVisiblePage = resumePage,
                     lastPersistedVisiblePage = resumePage,
+                    isReadingOfflineCopy = false,
                 )
+            }
+
+            val offlinePages = offlineDownloadRepository.getDownloadedPages(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapter.url,
+            )
+            if (!offlinePages.isNullOrEmpty()) {
+                _state.update { current ->
+                    if (current.selectedChapterUrl != chapter.url) return@update current
+                    val normalizedResume =
+                        current.chapterResumePage.coerceIn(0, offlinePages.lastIndex)
+                    current.copy(
+                        chapterPages = offlinePages,
+                        isLoadingChapterPages = false,
+                        chapterPagesError = null,
+                        chapterResumePage = normalizedResume,
+                        currentVisiblePage = normalizedResume,
+                        lastPersistedVisiblePage = normalizedResume,
+                        isReadingOfflineCopy = true,
+                    )
+                }
+                return@launch
             }
 
             extensionRuntimeRepository.getPageList(
@@ -348,7 +874,8 @@ class SourcesScreenModel(
             ).onSuccess { pages ->
                 _state.update { current ->
                     if (current.selectedChapterUrl != chapter.url) return@update current
-                    val normalizedResume = if (pages.isEmpty()) 0 else current.chapterResumePage.coerceIn(0, pages.lastIndex)
+                    val normalizedResume =
+                        if (pages.isEmpty()) 0 else current.chapterResumePage.coerceIn(0, pages.lastIndex)
                     current.copy(
                         chapterPages = pages,
                         isLoadingChapterPages = false,
@@ -356,6 +883,7 @@ class SourcesScreenModel(
                         chapterResumePage = normalizedResume,
                         currentVisiblePage = normalizedResume,
                         lastPersistedVisiblePage = normalizedResume,
+                        isReadingOfflineCopy = false,
                     )
                 }
             }.onFailure { error ->
@@ -365,6 +893,7 @@ class SourcesScreenModel(
                         chapterPages = emptyList(),
                         isLoadingChapterPages = false,
                         chapterPagesError = error.message ?: "Failed to load chapter pages",
+                        isReadingOfflineCopy = false,
                     )
                 }
             }
@@ -406,6 +935,7 @@ class SourcesScreenModel(
                 chapterResumePage = 0,
                 currentVisiblePage = 0,
                 lastPersistedVisiblePage = 0,
+                isReadingOfflineCopy = false,
             )
         }
     }
@@ -450,6 +980,17 @@ class SourcesScreenModel(
             totalPages = totalPages,
             completed = completed,
         )
+        runCatching {
+            mangaRepository.updateChapterProgress(
+                chapterId = buildChapterId(
+                    sourceId = sourceId,
+                    mangaUrl = mangaUrl,
+                    chapterUrl = chapterUrl,
+                ),
+                lastPageRead = clampedPage,
+                read = completed,
+            )
+        }
 
         val refreshedProgress = readerProgressRepository.getChapterProgress(
             sourceId = sourceId,
@@ -474,6 +1015,35 @@ class SourcesScreenModel(
                     current.lastPersistedVisiblePage
                 },
             )
+        }
+    }
+
+    private suspend fun refreshDownloadedChapterState(
+        sourceId: String,
+        mangaUrl: String,
+    ) {
+        val downloadedUrls = runCatching {
+            offlineDownloadRepository.getDownloadedChapterUrls(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+            )
+        }.getOrElse { emptySet() }
+        val autoDownloadEnabled = runCatching {
+            offlineDownloadRepository.isAutoDownloadEnabled(
+                sourceId = sourceId,
+                mangaUrl = mangaUrl,
+            )
+        }.getOrDefault(false)
+
+        _state.update { current ->
+            if (current.selectedSourceId != sourceId || current.selectedMangaUrl != mangaUrl) {
+                current
+            } else {
+                current.copy(
+                    downloadedChapterUrls = downloadedUrls,
+                    isAutoDownloadEnabled = autoDownloadEnabled,
+                )
+            }
         }
     }
 
@@ -509,6 +1079,7 @@ class SourcesScreenModel(
                 SourceFeedMode.POPULAR -> {
                     extensionRuntimeRepository.getPopularManga(sourceId, page)
                 }
+
                 SourceFeedMode.SEARCH -> {
                     extensionRuntimeRepository.searchManga(
                         extensionId = sourceId,
@@ -546,6 +1117,53 @@ class SourcesScreenModel(
             }
         }
     }
+
+    private suspend fun handleBrowseOpenRequest(request: BrowseOpenRequest) {
+        ensureSourcesLoaded()
+
+        val sourceAvailable = _state.value.sources.any { source ->
+            source.extensionId == request.sourceId
+        }
+        if (!sourceAvailable) {
+            _state.update { current ->
+                current.copy(
+                    error = "Requested source is not installed: ${request.sourceId}",
+                )
+            }
+            return
+        }
+
+        openSource(
+            extensionId = request.sourceId,
+            origin = request.origin,
+        )
+        openManga(request.mangaUrl)
+
+        val chapterUrl = request.chapterUrl ?: return
+        repeat(BROWSE_REQUEST_CHAPTER_LOOKUP_ATTEMPTS) {
+            val chapter = _state.value.chapters.firstOrNull { item -> item.url == chapterUrl }
+            if (chapter != null) {
+                openChapterInternal(chapter = chapter, forcedResumePage = request.resumePage)
+                return
+            }
+            delay(BROWSE_REQUEST_CHAPTER_LOOKUP_DELAY_MS)
+        }
+
+        _state.update { current ->
+            if (current.selectedMangaUrl == request.mangaUrl) {
+                current.copy(
+                    mangaDetailsError = "Requested chapter is unavailable in current source response",
+                )
+            } else {
+                current
+            }
+        }
+    }
+
+    private suspend fun ensureSourcesLoaded() {
+        if (_state.value.sources.isNotEmpty()) return
+        extensionRuntimeRepository.reloadInstalledSources()
+    }
 }
 
 enum class SourceFeedMode {
@@ -580,6 +1198,16 @@ data class SourcesUiState(
     val chapterResumePage: Int = 0,
     val currentVisiblePage: Int = 0,
     val lastPersistedVisiblePage: Int = 0,
+    val isInLibrary: Boolean = false,
+    val isUpdatingLibrary: Boolean = false,
+    val libraryActionError: String? = null,
+    val downloadedChapterUrls: Set<String> = emptySet(),
+    val downloadingChapterUrls: Set<String> = emptySet(),
+    val isDownloadingAllChapters: Boolean = false,
+    val isAutoDownloadEnabled: Boolean = false,
+    val downloadStatusMessage: String? = null,
+    val isReadingOfflineCopy: Boolean = false,
+    val openOrigin: BrowseOpenOrigin = BrowseOpenOrigin.BROWSE,
 ) {
     val selectedSource: LoadedSource?
         get() = selectedSourceId?.let { selectedId ->
@@ -591,3 +1219,57 @@ data class SourcesUiState(
 }
 
 private const val CHAPTER_PROGRESS_AUTOSAVE_DEBOUNCE_MS = 1_000L
+private const val BROWSE_REQUEST_CHAPTER_LOOKUP_ATTEMPTS = 20
+private const val BROWSE_REQUEST_CHAPTER_LOOKUP_DELAY_MS = 150L
+
+private fun MangaInfo.toDomainManga(
+    sourceId: String,
+    mangaId: String,
+    inLibrary: Boolean,
+): Manga {
+    return Manga(
+        id = mangaId,
+        title = title,
+        artist = artist,
+        author = author,
+        description = description,
+        coverUrl = coverUrl,
+        status = status.toMangaStatus(),
+        genres = genres,
+        inLibrary = inLibrary,
+        sourceId = sourceId,
+        url = url,
+    )
+}
+
+private fun ChapterInfo.toDomainChapter(
+    sourceId: String,
+    mangaUrl: String,
+    progress: ChapterProgress?,
+): Chapter {
+    return Chapter(
+        id = buildChapterId(
+            sourceId = sourceId,
+            mangaUrl = mangaUrl,
+            chapterUrl = url,
+        ),
+        mangaId = buildMangaId(sourceId = sourceId, mangaUrl = mangaUrl),
+        name = name,
+        chapterNumber = chapterNumber,
+        dateUpload = dateUpload,
+        read = progress?.completed == true,
+        lastPageRead = progress?.lastPageRead ?: 0,
+        url = url,
+        scanlator = scanlator,
+    )
+}
+
+private fun Int.toMangaStatus(): MangaStatus {
+    return when (this) {
+        MangaInfo.STATUS_ONGOING -> MangaStatus.ONGOING
+        MangaInfo.STATUS_COMPLETED -> MangaStatus.COMPLETED
+        MangaInfo.STATUS_HIATUS -> MangaStatus.HIATUS
+        MangaInfo.STATUS_CANCELLED -> MangaStatus.CANCELLED
+        else -> MangaStatus.UNKNOWN
+    }
+}

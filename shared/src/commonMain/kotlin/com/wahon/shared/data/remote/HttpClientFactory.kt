@@ -4,7 +4,7 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.plugin
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.client.plugins.cookies.HttpCookies
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 
 fun createHttpClient(
     rateLimiter: HostRateLimiter,
+    cookiesStorage: CookiesStorage,
 ): HttpClient {
     val client = HttpClient {
         install(HttpTimeout) {
@@ -21,7 +22,7 @@ fun createHttpClient(
         }
 
         install(HttpCookies) {
-            storage = AcceptAllCookiesStorage()
+            storage = cookiesStorage
         }
 
         install(ContentNegotiation) {

@@ -64,6 +64,7 @@ class ReaderProgressRepositoryImpl(
         lastPageRead: Int,
         totalPages: Int,
         completed: Boolean,
+        updateMangaLastRead: Boolean,
     ) {
         val now = Clock.System.now().toEpochMilliseconds()
 
@@ -80,19 +81,23 @@ class ReaderProgressRepositoryImpl(
             json.encodeToString(chapterPayload),
         )
 
-        val mangaPayload = MangaLastReadPayload(
-            chapterUrl = chapterUrl,
-            chapterName = chapterName,
-            lastPageRead = lastPageRead.coerceAtLeast(0),
-            totalPages = totalPages.coerceAtLeast(0),
-            completed = completed,
-            lastReadAt = now,
-        )
-        database.source_dataQueries.upsertSourceData(
-            sourceId,
-            mangaLastReadKey(mangaUrl),
-            json.encodeToString(mangaPayload),
-        )
+        if (updateMangaLastRead) {
+            val mangaPayload = MangaLastReadPayload(
+                chapterUrl = chapterUrl,
+                chapterName = chapterName,
+                lastPageRead = lastPageRead.coerceAtLeast(0),
+                totalPages = totalPages.coerceAtLeast(0),
+                completed = completed,
+                lastReadAt = now,
+            )
+            database.source_dataQueries.upsertSourceData(
+                sourceId,
+                mangaLastReadKey(mangaUrl),
+                json.encodeToString(mangaPayload),
+            )
+        }
+
+        trimSourceProgressCache(sourceId)
     }
 
     override suspend fun getMangaLastRead(
@@ -114,14 +119,52 @@ class ReaderProgressRepositoryImpl(
         return payload.toDomain(mangaUrl = mangaUrl)
     }
 
+    override suspend fun clearChapterProgress(
+        sourceId: String,
+        chapterUrl: String,
+    ) {
+        database.source_dataQueries.deleteSourceData(
+            source_id = sourceId,
+            key = chapterProgressKey(chapterUrl),
+        )
+    }
+
+    override suspend fun clearMangaLastRead(
+        sourceId: String,
+        mangaUrl: String,
+    ) {
+        database.source_dataQueries.deleteSourceData(
+            source_id = sourceId,
+            key = mangaLastReadKey(mangaUrl),
+        )
+    }
+
     private fun chapterProgressKey(chapterUrl: String): String {
-        return "chapter_progress::$chapterUrl"
+        return "$CHAPTER_PROGRESS_KEY_PREFIX$chapterUrl"
     }
 
     private fun mangaLastReadKey(mangaUrl: String): String {
-        return "manga_last_read::$mangaUrl"
+        return "$MANGA_LAST_READ_KEY_PREFIX$mangaUrl"
+    }
+
+    private fun trimSourceProgressCache(sourceId: String) {
+        database.source_dataQueries.pruneSourceDataByPrefixKeepLatest(
+            sourceId = sourceId,
+            keyPrefix = CHAPTER_PROGRESS_KEY_PREFIX,
+            keepCount = MAX_CHAPTER_PROGRESS_KEYS_PER_SOURCE,
+        )
+        database.source_dataQueries.pruneSourceDataByPrefixKeepLatest(
+            sourceId = sourceId,
+            keyPrefix = MANGA_LAST_READ_KEY_PREFIX,
+            keepCount = MAX_MANGA_LAST_READ_KEYS_PER_SOURCE,
+        )
     }
 }
+
+private const val CHAPTER_PROGRESS_KEY_PREFIX = "chapter_progress::"
+private const val MANGA_LAST_READ_KEY_PREFIX = "manga_last_read::"
+private const val MAX_CHAPTER_PROGRESS_KEYS_PER_SOURCE = 3000L
+private const val MAX_MANGA_LAST_READ_KEYS_PER_SOURCE = 1000L
 
 @Serializable
 private data class ChapterProgressPayload(

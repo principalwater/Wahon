@@ -3,6 +3,7 @@ package com.wahon.app.ui.screen.browse
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,7 +23,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -30,6 +34,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import coil3.compose.LocalPlatformContext
+import coil3.network.NetworkHeaders
+import coil3.network.httpHeaders
+import coil3.request.ImageRequest
+import com.wahon.app.navigation.BrowseOpenOrigin
 import com.wahon.extension.ChapterInfo
 import com.wahon.extension.MangaInfo
 import com.wahon.extension.PageInfo
@@ -42,6 +51,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 fun SourcesScreen(
     screenModel: SourcesScreenModel,
     modifier: Modifier = Modifier,
+    onNavigateToOrigin: (BrowseOpenOrigin) -> Unit = {},
 ) {
     val state by screenModel.state.collectAsState()
     val selectedSource = state.selectedSource
@@ -67,8 +77,20 @@ fun SourcesScreen(
                         MangaDetailsContent(
                             source = selectedSource,
                             state = state,
-                            onBack = screenModel::closeMangaDetails,
+                            onBack = {
+                                val target = screenModel.closeMangaDetails()
+                                if (target != null) {
+                                    onNavigateToOrigin(target)
+                                }
+                            },
                             onOpenChapter = screenModel::openChapter,
+                            onToggleLibrary = screenModel::toggleLibraryForCurrentManga,
+                            onToggleChapterRead = screenModel::setChapterReadState,
+                            onDownloadChapter = screenModel::downloadChapter,
+                            onRemoveDownloadedChapter = screenModel::removeDownloadedChapter,
+                            onDownloadAllChapters = screenModel::downloadAllChaptersForCurrentManga,
+                            onRemoveDownloadedTitle = screenModel::removeDownloadedForCurrentManga,
+                            onToggleAutoDownload = screenModel::toggleAutoDownloadForCurrentManga,
                         )
                     }
 
@@ -110,6 +132,11 @@ fun SourcesScreen(
                             Text(
                                 text = "Installed sources: ${state.sources.size}",
                                 style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                text = "Flow: Open source -> Search title/Popular -> Details -> Add to Library",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             val reloadError = state.error
                             if (!reloadError.isNullOrBlank()) {
@@ -190,7 +217,7 @@ private fun SourceListItem(
                     },
                 )
                 val runtimeMessage = source.runtimeMessage
-                if (!runtimeMessage.isNullOrBlank()) {
+                if (!source.isRuntimeExecutable && !runtimeMessage.isNullOrBlank()) {
                     Text(
                         text = runtimeMessage,
                         style = MaterialTheme.typography.bodySmall,
@@ -199,7 +226,7 @@ private fun SourceListItem(
                 }
             }
             OutlinedButton(onClick = onOpen) {
-                Text(if (source.isRuntimeExecutable) "Open" else "Details")
+                Text(if (source.isRuntimeExecutable) "Open catalog" else "Runtime info")
             }
         }
     }
@@ -208,10 +235,10 @@ private fun SourceListItem(
 private fun runtimeTitle(source: LoadedSource): String {
     val kindLabel = when (source.runtimeKind) {
         SourceRuntimeKind.JAVASCRIPT -> "JavaScript"
-        SourceRuntimeKind.AIDOKU_AIX -> "Aidoku .aix (WASM)"
+        SourceRuntimeKind.AIDOKU_AIX -> "Aidoku .aix"
         SourceRuntimeKind.UNKNOWN -> "Unknown"
     }
-    val status = if (source.isRuntimeExecutable) "ready" else "not executable"
+    val status = if (source.isRuntimeExecutable) "ready" else "error"
     return "Runtime: $kindLabel ($status)"
 }
 
@@ -248,6 +275,11 @@ private fun SourceCatalog(
             } else {
                 MaterialTheme.colorScheme.error
             },
+        )
+        Text(
+            text = "Tip: use Search or Popular, open manga details, then add it to Library.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         if (!source.isRuntimeExecutable) {
@@ -418,7 +450,7 @@ private fun MangaListItem(
                 }
             }
             OutlinedButton(onClick = onOpen) {
-                Text("Details")
+                Text("Open details")
             }
         }
     }
@@ -430,84 +462,180 @@ private fun MangaDetailsContent(
     state: SourcesUiState,
     onBack: () -> Unit,
     onOpenChapter: (ChapterInfo) -> Unit,
+    onToggleLibrary: () -> Unit,
+    onToggleChapterRead: (ChapterInfo, Boolean) -> Unit,
+    onDownloadChapter: (ChapterInfo) -> Unit,
+    onRemoveDownloadedChapter: (ChapterInfo) -> Unit,
+    onDownloadAllChapters: () -> Unit,
+    onRemoveDownloadedTitle: () -> Unit,
+    onToggleAutoDownload: () -> Unit,
 ) {
     val manga = state.mangaDetails
+    val backButtonText = when (state.openOrigin) {
+        BrowseOpenOrigin.BROWSE -> "Back to list"
+        BrowseOpenOrigin.LIBRARY -> "Back to Library"
+        BrowseOpenOrigin.UPDATES -> "Back to Updates"
+        BrowseOpenOrigin.HISTORY -> "Back to History"
+    }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        OutlinedButton(onClick = onBack) {
-            Text("Back to list")
-        }
-
-        if (state.isLoadingMangaDetails && manga == null) {
+    if (state.isLoadingMangaDetails && manga == null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedButton(onClick = onBack) {
+                Text(backButtonText)
+            }
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
                 CircularProgressIndicator()
             }
-            return
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "details_back_button") {
+            OutlinedButton(onClick = onBack) {
+                Text(backButtonText)
+            }
         }
 
         val errorText = state.mangaDetailsError
         if (!errorText.isNullOrBlank()) {
-            Text(
-                text = errorText,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-            )
+            item(key = "details_error") {
+                Text(
+                    text = errorText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
         }
 
         if (manga != null) {
-            Text(
-                text = manga.title,
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(
-                text = "Source: ${source.name}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            val mangaLastRead = state.mangaLastRead
-            if (mangaLastRead != null) {
+            item(key = "details_title") {
                 Text(
-                    text = "Last read: ${mangaLastRead.chapterName} (page ${mangaLastRead.lastPageRead + 1})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    text = manga.title,
+                    style = MaterialTheme.typography.titleLarge,
                 )
             }
-            if (manga.description.isNotBlank()) {
+            item(key = "details_source") {
                 Text(
-                    text = manga.description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 5,
-                    overflow = TextOverflow.Ellipsis,
+                    text = "Source: ${source.name}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            item(key = "details_library_button") {
+                OutlinedButton(
+                    onClick = onToggleLibrary,
+                    enabled = !state.isUpdatingLibrary,
+                ) {
+                    val actionText = if (state.isInLibrary) {
+                        "Remove from Library"
+                    } else {
+                        "Add to Library"
+                    }
+                    Text(if (state.isUpdatingLibrary) "Saving..." else actionText)
+                }
+            }
+            if (!state.isInLibrary) {
+                item(key = "details_library_hint") {
+                    Text(
+                        text = "After adding, this title appears in Library with saved progress.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            item(key = "details_download_controls") {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onDownloadAllChapters,
+                        enabled = !state.isDownloadingAllChapters && state.chapters.isNotEmpty(),
+                    ) {
+                        Text(if (state.isDownloadingAllChapters) "Downloading..." else "Download title")
+                    }
+                    OutlinedButton(onClick = onToggleAutoDownload) {
+                        Text(if (state.isAutoDownloadEnabled) "Auto-download: ON" else "Auto-download: OFF")
+                    }
+                }
+            }
+            if (state.downloadedChapterUrls.isNotEmpty()) {
+                item(key = "details_remove_downloads") {
+                    OutlinedButton(onClick = onRemoveDownloadedTitle) {
+                        Text("Remove downloads")
+                    }
+                }
+            }
+
+            val libraryActionError = state.libraryActionError
+            if (!libraryActionError.isNullOrBlank()) {
+                item(key = "details_library_error") {
+                    Text(
+                        text = libraryActionError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            val downloadStatusMessage = state.downloadStatusMessage
+            if (!downloadStatusMessage.isNullOrBlank()) {
+                item(key = "details_download_status") {
+                    Text(
+                        text = downloadStatusMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            val mangaLastRead = state.mangaLastRead
+            if (mangaLastRead != null) {
+                item(key = "details_last_read") {
+                    Text(
+                        text = "Last read: ${mangaLastRead.chapterName} (page ${mangaLastRead.lastPageRead + 1})",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
+            if (manga.description.isNotBlank()) {
+                item(key = "details_description") {
+                    Text(
+                        text = manga.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 5,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
 
         if (state.chapters.isEmpty()) {
-            Text(
-                text = "No chapters returned.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            return
-        }
-
-        Text(
-            text = "Chapters: ${state.chapters.size}",
-            style = MaterialTheme.typography.titleMedium,
-        )
-
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+            item(key = "details_no_chapters") {
+                Text(
+                    text = "No chapters returned.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            item(key = "details_chapters_count") {
+                Text(
+                    text = "Chapters: ${state.chapters.size}",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
             items(
                 items = state.chapters,
                 key = { chapter -> chapter.url },
@@ -515,7 +643,12 @@ private fun MangaDetailsContent(
                 ChapterItem(
                     chapter = chapter,
                     progress = state.chapterProgressByUrl[chapter.url],
+                    isDownloaded = state.downloadedChapterUrls.contains(chapter.url),
+                    isDownloading = state.downloadingChapterUrls.contains(chapter.url),
                     onRead = { onOpenChapter(chapter) },
+                    onToggleRead = { read -> onToggleChapterRead(chapter, read) },
+                    onDownload = { onDownloadChapter(chapter) },
+                    onRemoveDownload = { onRemoveDownloadedChapter(chapter) },
                 )
             }
         }
@@ -526,8 +659,15 @@ private fun MangaDetailsContent(
 private fun ChapterItem(
     chapter: ChapterInfo,
     progress: ChapterProgress?,
+    isDownloaded: Boolean,
+    isDownloading: Boolean,
     onRead: () -> Unit,
+    onToggleRead: (Boolean) -> Unit,
+    onDownload: () -> Unit,
+    onRemoveDownload: () -> Unit,
 ) {
+    val isRead = progress?.completed == true
+
     Surface(
         shape = MaterialTheme.shapes.medium,
         tonalElevation = 1.dp,
@@ -563,9 +703,37 @@ private fun ChapterItem(
                     color = MaterialTheme.colorScheme.primary,
                 )
             }
+            if (isDownloaded) {
+                Text(
+                    text = "Offline copy available",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
 
-            OutlinedButton(onClick = onRead) {
-                Text("Read")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(onClick = onRead) {
+                    Text("Read")
+                }
+                OutlinedButton(
+                    onClick = { onToggleRead(!isRead) },
+                ) {
+                    Text(if (isRead) "Mark unread" else "Mark read")
+                }
+                OutlinedButton(
+                    onClick = if (isDownloaded) onRemoveDownload else onDownload,
+                    enabled = !isDownloading,
+                ) {
+                    Text(
+                        when {
+                            isDownloaded -> "Remove offline"
+                            isDownloading -> "Downloading..."
+                            else -> "Download"
+                        },
+                    )
+                }
             }
         }
     }
@@ -600,6 +768,14 @@ private fun ChapterReaderContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 8.dp),
         )
+        if (state.isReadingOfflineCopy) {
+            Text(
+                text = "Mode: Offline",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
 
         if (state.isLoadingChapterPages) {
             Box(
@@ -660,14 +836,37 @@ private fun ChapterReaderContent(
                 items = state.chapterPages,
                 key = { page -> page.index },
             ) { page ->
-                ChapterPageItem(page = page)
+                ChapterPageItem(
+                    page = page,
+                    refererUrl = state.selectedChapterUrl ?: source.baseUrl,
+                    sourceBaseUrl = source.baseUrl,
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ChapterPageItem(page: PageInfo) {
+private fun ChapterPageItem(
+    page: PageInfo,
+    refererUrl: String,
+    sourceBaseUrl: String,
+) {
+    val platformContext = LocalPlatformContext.current
+    val resolvedReferer = refererUrl.ifBlank { sourceBaseUrl }
+    val imageRequest = remember(page.imageUrl, platformContext, resolvedReferer) {
+        ImageRequest.Builder(platformContext)
+            .data(page.imageUrl)
+            .httpHeaders(
+                NetworkHeaders.Builder()
+                    .set("Referer", resolvedReferer)
+                    .set("User-Agent", READER_USER_AGENT)
+                    .build(),
+            )
+            .build()
+    }
+    var imageError by remember(page.imageUrl) { mutableStateOf<String?>(null) }
+
     Surface(
         shape = MaterialTheme.shapes.medium,
         tonalElevation = 1.dp,
@@ -685,11 +884,25 @@ private fun ChapterPageItem(page: PageInfo) {
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
             AsyncImage(
-                model = page.imageUrl,
+                model = imageRequest,
                 contentDescription = "Page ${page.index + 1}",
                 modifier = Modifier.fillMaxWidth(),
                 contentScale = ContentScale.FillWidth,
+                onSuccess = { imageError = null },
+                onError = { state ->
+                    imageError = state.result.throwable.message
+                        ?: "Failed to render image"
+                },
             )
+            val pageError = imageError
+            if (!pageError.isNullOrBlank()) {
+                Text(
+                    text = pageError,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                )
+            }
         }
     }
 }
@@ -726,3 +939,6 @@ private fun EmptySourcesState(
         }
     }
 }
+
+private const val READER_USER_AGENT =
+    "Mozilla/5.0 (Wahon; Reader) AppleWebKit/537.36 (KHTML, like Gecko) Mobile Safari/537.36"

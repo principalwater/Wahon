@@ -13,6 +13,9 @@ CREATE TABLE manga (
     updated_at INTEGER NOT NULL
 );
 
+CREATE INDEX idx_manga_in_library_updated_at ON manga(in_library, updated_at DESC);
+CREATE INDEX idx_manga_source_id ON manga(source_id);
+
 selectLibraryManga:
 SELECT *
 FROM manga
@@ -24,8 +27,8 @@ SELECT *
 FROM manga
 WHERE id = ?;
 
-upsertManga:
-INSERT OR REPLACE INTO manga(
+upsertManga {
+INSERT OR IGNORE INTO manga(
     id,
     source_id,
     url,
@@ -39,7 +42,22 @@ INSERT OR REPLACE INTO manga(
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+VALUES (:id, :source_id, :url, :title, :author, :artist, :description, :cover_url, :status, :in_library, :created_at, :updated_at);
+
+UPDATE manga
+SET
+    source_id = :source_id,
+    url = :url,
+    title = :title,
+    author = :author,
+    artist = :artist,
+    description = :description,
+    cover_url = :cover_url,
+    status = :status,
+    in_library = :in_library,
+    updated_at = :updated_at
+WHERE id = :id;
+}
 
 updateMangaLibraryFlag:
 UPDATE manga

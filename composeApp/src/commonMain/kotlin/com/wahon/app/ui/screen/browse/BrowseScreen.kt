@@ -11,11 +11,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import com.wahon.app.navigation.BrowseOpenOrigin
 
 @Composable
 fun BrowseScreen(
     sourcesScreenModel: SourcesScreenModel,
     extensionsScreenModel: ExtensionsScreenModel,
+    onNavigateToOrigin: (BrowseOpenOrigin) -> Unit = {},
 ) {
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     val tabs = listOf("Sources", "Extensions")
@@ -33,7 +35,10 @@ fun BrowseScreen(
 
         when (selectedTab) {
             0 -> {
-                SourcesScreen(screenModel = sourcesScreenModel)
+                SourcesScreen(
+                    screenModel = sourcesScreenModel,
+                    onNavigateToOrigin = onNavigateToOrigin,
+                )
             }
             1 -> {
                 ExtensionsScreen(screenModel = extensionsScreenModel)

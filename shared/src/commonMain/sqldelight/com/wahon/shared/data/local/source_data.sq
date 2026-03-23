@@ -5,10 +5,19 @@ CREATE TABLE source_data (
     PRIMARY KEY (source_id, key)
 );
 
+CREATE INDEX idx_source_data_source_id ON source_data(source_id);
+
 selectSourceDataValue:
 SELECT value
 FROM source_data
 WHERE source_id = ? AND key = ?;
+
+selectSourceDataByPrefix:
+SELECT key, value
+FROM source_data
+WHERE source_id = :sourceId
+  AND key LIKE (:keyPrefix || '%')
+ORDER BY key ASC;
 
 upsertSourceData:
 INSERT OR REPLACE INTO source_data(source_id, key, value)
@@ -21,3 +30,21 @@ WHERE source_id = ? AND key = ?;
 deleteAllSourceDataBySourceId:
 DELETE FROM source_data
 WHERE source_id = ?;
+
+deleteSourceDataByPrefix:
+DELETE FROM source_data
+WHERE source_id = :sourceId
+  AND key LIKE (:keyPrefix || '%');
+
+pruneSourceDataByPrefixKeepLatest:
+DELETE FROM source_data
+WHERE source_id = :sourceId
+  AND key LIKE (:keyPrefix || '%')
+  AND rowid NOT IN (
+    SELECT rowid
+    FROM source_data
+    WHERE source_id = :sourceId
+      AND key LIKE (:keyPrefix || '%')
+    ORDER BY rowid DESC
+    LIMIT :keepCount
+  );

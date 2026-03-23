@@ -11,14 +11,45 @@ CREATE TABLE chapter (
     updated_at INTEGER NOT NULL
 );
 
+CREATE INDEX idx_chapter_manga_id ON chapter(manga_id);
+CREATE INDEX idx_chapter_manga_id_chapter_number ON chapter(manga_id, chapter_number DESC);
+
 selectChaptersByMangaId:
 SELECT *
 FROM chapter
 WHERE manga_id = ?
 ORDER BY chapter_number DESC;
 
-upsertChapter:
-INSERT OR REPLACE INTO chapter(
+selectRecentLibraryUpdates:
+SELECT
+    chapter.id,
+    chapter.manga_id,
+    chapter.url,
+    chapter.name,
+    chapter.chapter_number,
+    chapter.date_upload,
+    chapter.read,
+    chapter.last_page_read,
+    chapter.created_at,
+    chapter.updated_at,
+    manga.title AS manga_title,
+    manga.cover_url AS manga_cover_url,
+    manga.source_id AS manga_source_id,
+    manga.url AS manga_url
+FROM chapter
+INNER JOIN manga ON manga.id = chapter.manga_id
+WHERE manga.in_library = 1
+  AND chapter.created_at > manga.updated_at
+ORDER BY chapter.created_at DESC
+LIMIT ?;
+
+selectChapterById:
+SELECT *
+FROM chapter
+WHERE id = ?;
+
+upsertChapter {
+INSERT OR IGNORE INTO chapter(
     id,
     manga_id,
     url,
@@ -30,7 +61,20 @@ INSERT OR REPLACE INTO chapter(
     created_at,
     updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+VALUES (:id, :manga_id, :url, :name, :chapter_number, :date_upload, :read, :last_page_read, :created_at, :updated_at);
+
+UPDATE chapter
+SET
+    manga_id = :manga_id,
+    url = :url,
+    name = :name,
+    chapter_number = :chapter_number,
+    date_upload = :date_upload,
+    read = :read,
+    last_page_read = :last_page_read,
+    updated_at = :updated_at
+WHERE id = :id;
+}
 
 updateChapterProgress:
 UPDATE chapter
@@ -40,3 +84,10 @@ WHERE id = ?;
 deleteChaptersByMangaId:
 DELETE FROM chapter
 WHERE manga_id = ?;
+
+deleteOrphanedChapters:
+DELETE FROM chapter
+WHERE manga_id NOT IN (
+    SELECT id
+    FROM manga
+);

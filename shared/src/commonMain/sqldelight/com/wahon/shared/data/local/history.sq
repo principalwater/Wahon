@@ -5,14 +5,43 @@ CREATE TABLE history (
     time_read_seconds INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE INDEX idx_history_last_read_at ON history(last_read_at DESC);
+
 selectRecentHistory:
 SELECT *
 FROM history
 ORDER BY last_read_at DESC;
 
-upsertHistory:
-INSERT OR REPLACE INTO history(chapter_id, last_read_at, time_read_seconds)
-VALUES (?, ?, ?);
+selectRecentHistoryWithDetails:
+SELECT
+    history.id,
+    history.chapter_id,
+    history.last_read_at,
+    history.time_read_seconds,
+    chapter.name AS chapter_name,
+    chapter.last_page_read,
+    chapter.url AS chapter_url,
+    manga.id AS manga_id,
+    manga.title AS manga_title,
+    manga.cover_url AS manga_cover_url,
+    manga.url AS manga_url,
+    manga.source_id AS manga_source_id
+FROM history
+INNER JOIN chapter ON chapter.id = history.chapter_id
+INNER JOIN manga ON manga.id = chapter.manga_id
+ORDER BY history.last_read_at DESC
+LIMIT ?;
+
+upsertHistory {
+INSERT OR IGNORE INTO history(chapter_id, last_read_at, time_read_seconds)
+VALUES (:chapter_id, :last_read_at, :time_read_seconds);
+
+UPDATE history
+SET
+    last_read_at = :last_read_at,
+    time_read_seconds = :time_read_seconds
+WHERE chapter_id = :chapter_id;
+}
 
 deleteHistoryByChapterId:
 DELETE FROM history
@@ -20,3 +49,19 @@ WHERE chapter_id = ?;
 
 clearHistory:
 DELETE FROM history;
+
+pruneHistoryKeepLatest:
+DELETE FROM history
+WHERE id NOT IN (
+    SELECT id
+    FROM history
+    ORDER BY last_read_at DESC
+    LIMIT :keepCount
+);
+
+deleteOrphanedHistory:
+DELETE FROM history
+WHERE chapter_id NOT IN (
+    SELECT id
+    FROM chapter
+);

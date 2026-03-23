@@ -22,10 +22,21 @@ interface ReaderProgressRepository {
         lastPageRead: Int,
         totalPages: Int,
         completed: Boolean,
+        updateMangaLastRead: Boolean = true,
+    )
+
+    suspend fun clearChapterProgress(
+        sourceId: String,
+        chapterUrl: String,
     )
 
     suspend fun getMangaLastRead(
         sourceId: String,
         mangaUrl: String,
     ): MangaLastRead?
+
+    suspend fun clearMangaLastRead(
+        sourceId: String,
+        mangaUrl: String,
+    )
 }
