@@ -2,8 +2,6 @@ package com.wahon.shared.di
 
 import com.wahon.shared.data.remote.ExtensionRepoApi
 import com.wahon.shared.data.remote.HostRateLimiter
-import com.wahon.shared.data.remote.AntiBotChallengeResolver
-import com.wahon.shared.data.remote.NoOpAntiBotChallengeResolver
 import com.wahon.shared.data.remote.PersistentCookiesStorage
 import com.wahon.shared.data.remote.createHttpClient
 import com.wahon.shared.data.remote.defaultHostThrottleProfiles
@@ -36,7 +34,6 @@ import org.koin.dsl.module
 val sharedModule = module {
     single<HostRateLimiter> { HostRateLimiter(profiles = defaultHostThrottleProfiles()) }
     single<CookiesStorage> { PersistentCookiesStorage(settings = get()) }
-    single<AntiBotChallengeResolver> { NoOpAntiBotChallengeResolver() }
     single { createHttpClient(rateLimiter = get(), cookiesStorage = get(), antiBotChallengeResolver = get()) }
     single { ExtensionRepoApi(get()) }
     single { WahonDatabaseFactory(get()) }

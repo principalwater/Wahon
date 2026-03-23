@@ -96,5 +96,5 @@ private const val DEFAULT_ACCEPT_HEADER =
 private const val DEFAULT_ACCEPT_LANGUAGE =
     "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
 private const val ANTI_BOT_ERROR_MESSAGE =
-    "The site requested an anti-bot challenge. Try VPN or another network. WebView-based bypass is planned for the next phases."
+    "The site requested an anti-bot challenge. Automatic bypass failed. Try VPN or another network and retry."
 private const val LOG_TAG = "HttpClientFactory"
