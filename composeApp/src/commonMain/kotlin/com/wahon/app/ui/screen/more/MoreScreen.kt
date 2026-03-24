@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import com.wahon.shared.getPlatformName
 import com.wahon.shared.data.remote.DnsOverHttpsProvider
 import com.wahon.shared.data.remote.NetworkPreferencesStore
 import org.koin.compose.koinInject
@@ -38,8 +39,17 @@ class MoreScreenWrapper : Screen {
 fun MoreScreen() {
     val navigator = LocalNavigator.currentOrThrow
     val networkPreferencesStore = koinInject<NetworkPreferencesStore>()
+    val platformName = remember { getPlatformName() }
     var dohProvider by remember {
         mutableStateOf(networkPreferencesStore.selectedDohProvider())
+    }
+    val isIosPlatform = platformName.startsWith("iOS", ignoreCase = true)
+    val dohNote = buildString {
+        append("Current: ${dohProvider.displayName()}. Tap to switch.")
+        append(" Requires app restart.")
+        if (isIosPlatform) {
+            append(" iOS DoH backend is not implemented yet.")
+        }
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -66,7 +76,7 @@ fun MoreScreen() {
             headlineContent = { Text("DNS-over-HTTPS") },
             supportingContent = {
                 Text(
-                    "Current: ${dohProvider.displayName()}. Tap to switch. Requires app restart.",
+                    dohNote,
                 )
             },
             leadingContent = {
