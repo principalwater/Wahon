@@ -1,9 +1,12 @@
 package com.wahon.shared.data.repository
 
 import com.wahon.shared.data.local.CbzArchiveReader
+import com.wahon.shared.data.local.LocalArchiveFileScanner
 import com.wahon.shared.data.local.OfflineChapterFileStore
 import com.wahon.shared.data.local.WahonDatabase
 import com.wahon.shared.data.remote.currentTimeMillis
+import com.wahon.shared.domain.model.LocalCbzImportBatchResult
+import com.wahon.shared.domain.model.LocalCbzImportFailure
 import com.wahon.shared.domain.model.Chapter
 import com.wahon.shared.domain.model.LocalCbzImportResult
 import com.wahon.shared.domain.model.LOCAL_CBZ_SOURCE_ID
@@ -21,6 +24,7 @@ class LocalArchiveRepositoryImpl(
     private val mangaRepository: MangaRepository,
     private val offlineChapterFileStore: OfflineChapterFileStore,
     private val cbzArchiveReader: CbzArchiveReader,
+    private val localArchiveFileScanner: LocalArchiveFileScanner,
 ) : LocalArchiveRepository {
 
     private val json = Json {
@@ -163,6 +167,55 @@ class LocalArchiveRepositoryImpl(
             database.source_dataQueries.deleteSourceData(
                 source_id = LOCAL_CBZ_SOURCE_ID,
                 key = chapterDataKey,
+            )
+        }
+    }
+
+    override suspend fun listCbzArchives(
+        directoryPath: String,
+        recursive: Boolean,
+    ): Result<List<String>> {
+        return runCatching {
+            localArchiveFileScanner.listCbzFiles(
+                directoryPath = directoryPath,
+                recursive = recursive,
+            ).sorted()
+        }
+    }
+
+    override suspend fun importCbzDirectory(
+        directoryPath: String,
+        recursive: Boolean,
+    ): Result<LocalCbzImportBatchResult> {
+        val archives = listCbzArchives(
+            directoryPath = directoryPath,
+            recursive = recursive,
+        ).getOrElse { error ->
+            return Result.failure(error)
+        }
+
+        return runCatching {
+            var imported = 0
+            val failures = mutableListOf<LocalCbzImportFailure>()
+
+            archives.forEach { archivePath ->
+                importCbzArchive(archivePath)
+                    .onSuccess {
+                        imported += 1
+                    }
+                    .onFailure { error ->
+                        failures += LocalCbzImportFailure(
+                            archivePath = archivePath,
+                            reason = error.message ?: "Unknown import failure",
+                        )
+                    }
+            }
+
+            LocalCbzImportBatchResult(
+                discovered = archives.size,
+                imported = imported,
+                failed = failures.size,
+                failures = failures,
             )
         }
     }

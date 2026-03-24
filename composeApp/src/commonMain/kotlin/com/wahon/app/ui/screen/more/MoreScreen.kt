@@ -62,6 +62,9 @@ fun MoreScreen() {
     var cbzImportPath by remember { mutableStateOf("") }
     var cbzImportInProgress by remember { mutableStateOf(false) }
     var cbzImportStatus by remember { mutableStateOf<String?>(null) }
+    var cbzDirectoryPath by remember { mutableStateOf("") }
+    var cbzDirectoryImportInProgress by remember { mutableStateOf(false) }
+    var cbzDirectoryStatus by remember { mutableStateOf<String?>(null) }
     val isIosPlatform = platformName.startsWith("iOS", ignoreCase = true)
     val dohNote = buildString {
         append("Current: ${dohProvider.displayName()}. Tap to switch.")
@@ -189,6 +192,77 @@ fun MoreScreen() {
                 )
             }
         }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = "Import CBZ Directory",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = cbzDirectoryPath,
+                onValueChange = { value ->
+                    cbzDirectoryPath = value
+                    if (cbzDirectoryStatus != null) {
+                        cbzDirectoryStatus = null
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Absolute directory path") },
+                supportingText = {
+                    Text("Scans recursively and imports all .cbz archives.")
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    val rawPath = cbzDirectoryPath.trim()
+                    if (rawPath.isBlank() || cbzDirectoryImportInProgress) {
+                        return@Button
+                    }
+                    cbzDirectoryImportInProgress = true
+                    cbzDirectoryStatus = null
+                    coroutineScope.launch {
+                        localArchiveRepository.importCbzDirectory(rawPath)
+                            .onSuccess { result ->
+                                cbzDirectoryStatus = buildDirectoryImportStatus(result)
+                            }
+                            .onFailure { error ->
+                                cbzDirectoryStatus = error.message ?: "Failed to import CBZ directory"
+                            }
+                        cbzDirectoryImportInProgress = false
+                    }
+                },
+                enabled = cbzDirectoryPath.trim().isNotEmpty() && !cbzDirectoryImportInProgress,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (cbzDirectoryImportInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                    }
+                    Text("Import Directory")
+                }
+            }
+            val directoryStatus = cbzDirectoryStatus
+            if (!directoryStatus.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = directoryStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -208,4 +282,22 @@ private fun DnsOverHttpsProvider.displayName(): String = when (this) {
     DnsOverHttpsProvider.CLOUDFLARE -> "Cloudflare"
     DnsOverHttpsProvider.GOOGLE -> "Google"
     DnsOverHttpsProvider.ADGUARD -> "AdGuard"
+}
+
+private fun buildDirectoryImportStatus(
+    result: com.wahon.shared.domain.model.LocalCbzImportBatchResult,
+): String {
+    if (result.discovered == 0) {
+        return "No .cbz files were found in the selected directory."
+    }
+    if (result.failed == 0) {
+        return "Imported ${result.imported}/${result.discovered} archives."
+    }
+
+    val failedPreview = result.failures
+        .take(3)
+        .joinToString(separator = " | ") { failure ->
+            "${failure.archivePath.substringAfterLast('/').substringAfterLast('\\')}: ${failure.reason}"
+        }
+    return "Imported ${result.imported}/${result.discovered}. Failed: ${result.failed}. $failedPreview"
 }
