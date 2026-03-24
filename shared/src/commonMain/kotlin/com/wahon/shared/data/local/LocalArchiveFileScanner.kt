@@ -5,4 +5,9 @@ expect class LocalArchiveFileScanner() {
         directoryPath: String,
         recursive: Boolean = true,
     ): List<String>
+
+    fun listPdfFiles(
+        directoryPath: String,
+        recursive: Boolean = true,
+    ): List<String>
 }

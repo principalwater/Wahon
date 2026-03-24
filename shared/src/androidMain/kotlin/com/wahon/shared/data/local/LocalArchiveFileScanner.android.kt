@@ -11,6 +11,29 @@ actual class LocalArchiveFileScanner actual constructor() {
         directoryPath: String,
         recursive: Boolean,
     ): List<String> {
+        return listFilesByExtension(
+            directoryPath = directoryPath,
+            recursive = recursive,
+            extension = CBZ_EXTENSION,
+        )
+    }
+
+    actual fun listPdfFiles(
+        directoryPath: String,
+        recursive: Boolean,
+    ): List<String> {
+        return listFilesByExtension(
+            directoryPath = directoryPath,
+            recursive = recursive,
+            extension = PDF_EXTENSION,
+        )
+    }
+
+    private fun listFilesByExtension(
+        directoryPath: String,
+        recursive: Boolean,
+        extension: String,
+    ): List<String> {
         val normalizedDirectoryPath = directoryPath.trim()
         require(normalizedDirectoryPath.isNotBlank()) { "Directory path is blank" }
 
@@ -19,15 +42,21 @@ actual class LocalArchiveFileScanner actual constructor() {
         require(rootMetadata.isDirectory) { "Path is not a directory: $normalizedDirectoryPath" }
 
         val paths = if (recursive) {
-            discoverRecursive(root)
+            discoverRecursive(
+                root = root,
+                extension = extension,
+            )
         } else {
             fileSystem.list(root)
-                .filter { path -> isCbzFile(path) }
+                .filter { path -> matchesExtension(path, extension) }
         }
         return paths.map { path -> path.toString() }
     }
 
-    private fun discoverRecursive(root: Path): List<Path> {
+    private fun discoverRecursive(
+        root: Path,
+        extension: String,
+    ): List<Path> {
         val archives = mutableListOf<Path>()
         val stack = ArrayDeque<Path>()
         stack.addLast(root)
@@ -52,7 +81,7 @@ actual class LocalArchiveFileScanner actual constructor() {
                 continue
             }
 
-            if (isCbzFile(current)) {
+            if (matchesExtension(current, extension)) {
                 archives += current
             }
         }
@@ -60,7 +89,7 @@ actual class LocalArchiveFileScanner actual constructor() {
         return archives
     }
 
-    private fun isCbzFile(path: Path): Boolean {
+    private fun matchesExtension(path: Path, extension: String): Boolean {
         val metadata = try {
             fileSystem.metadata(path)
         } catch (_: Throwable) {
@@ -68,10 +97,11 @@ actual class LocalArchiveFileScanner actual constructor() {
         } ?: return false
 
         if (!metadata.isRegularFile) return false
-        return path.name.lowercase().endsWith(CBZ_EXTENSION)
+        return path.name.lowercase().endsWith(extension)
     }
 
     private companion object {
         private const val CBZ_EXTENSION = ".cbz"
+        private const val PDF_EXTENSION = ".pdf"
     }
 }

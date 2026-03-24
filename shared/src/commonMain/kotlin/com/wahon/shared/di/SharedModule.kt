@@ -8,6 +8,7 @@ import com.wahon.shared.data.remote.createHttpClient
 import com.wahon.shared.data.remote.defaultHostThrottleProfiles
 import com.wahon.shared.data.local.CbzArchiveReader
 import com.wahon.shared.data.local.LocalArchiveFileScanner
+import com.wahon.shared.data.local.LocalPdfPageRenderer
 import com.wahon.shared.data.local.WahonDatabaseFactory
 import com.wahon.shared.data.repository.ExtensionManager
 import com.wahon.shared.data.repository.ExtensionRuntimeRepositoryImpl
@@ -53,6 +54,7 @@ val sharedModule = module {
     single { get<WahonDatabaseFactory>().create() }
     single { CbzArchiveReader() }
     single { LocalArchiveFileScanner() }
+    single { LocalPdfPageRenderer() }
     single { SourceManager() }
     single<MangadexAixSourceAdapter> { MangadexAixSourceAdapter(get()) }
     single<MultiChanAixSourceAdapter> { MultiChanAixSourceAdapter(get()) }
@@ -64,7 +66,7 @@ val sharedModule = module {
     single<HistoryRepository> { HistoryRepositoryImpl(get()) }
     single<MangaRepository> { MangaRepositoryImpl(get()) }
     single<OfflineDownloadRepository> { OfflineDownloadRepositoryImpl(get(), get(), get(), get()) }
-    single<LocalArchiveRepository> { LocalArchiveRepositoryImpl(get(), get(), get(), get(), get()) }
+    single<LocalArchiveRepository> { LocalArchiveRepositoryImpl(get(), get(), get(), get(), get(), get()) }
     single<UpdatesRepository> { UpdatesRepositoryImpl(get()) }
     single<ReaderProgressRepository> { ReaderProgressRepositoryImpl(get()) }
     single { ExtensionManager(get()) }

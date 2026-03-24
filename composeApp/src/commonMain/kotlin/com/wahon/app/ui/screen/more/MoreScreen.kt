@@ -65,6 +65,12 @@ fun MoreScreen() {
     var cbzDirectoryPath by remember { mutableStateOf("") }
     var cbzDirectoryImportInProgress by remember { mutableStateOf(false) }
     var cbzDirectoryStatus by remember { mutableStateOf<String?>(null) }
+    var pdfImportPath by remember { mutableStateOf("") }
+    var pdfImportInProgress by remember { mutableStateOf(false) }
+    var pdfImportStatus by remember { mutableStateOf<String?>(null) }
+    var pdfDirectoryPath by remember { mutableStateOf("") }
+    var pdfDirectoryImportInProgress by remember { mutableStateOf(false) }
+    var pdfDirectoryStatus by remember { mutableStateOf<String?>(null) }
     val isIosPlatform = platformName.startsWith("iOS", ignoreCase = true)
     val dohNote = buildString {
         append("Current: ${dohProvider.displayName()}. Tap to switch.")
@@ -230,7 +236,10 @@ fun MoreScreen() {
                     coroutineScope.launch {
                         localArchiveRepository.importCbzDirectory(rawPath)
                             .onSuccess { result ->
-                                cbzDirectoryStatus = buildDirectoryImportStatus(result)
+                                cbzDirectoryStatus = buildDirectoryImportStatus(
+                                    result = result,
+                                    fileExtension = ".cbz",
+                                )
                             }
                             .onFailure { error ->
                                 cbzDirectoryStatus = error.message ?: "Failed to import CBZ directory"
@@ -263,6 +272,162 @@ fun MoreScreen() {
                 )
             }
         }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = "Import Local PDF",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = pdfImportPath,
+                onValueChange = { value ->
+                    pdfImportPath = value
+                    if (pdfImportStatus != null) {
+                        pdfImportStatus = null
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Absolute .pdf path") },
+                supportingText = {
+                    val supportText = if (isIosPlatform) {
+                        "PDF import currently works on Android only."
+                    } else {
+                        "Each PDF page is rendered to PNG and added to Local source."
+                    }
+                    Text(supportText)
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    val rawPath = pdfImportPath.trim()
+                    if (rawPath.isBlank() || pdfImportInProgress) {
+                        return@Button
+                    }
+                    pdfImportInProgress = true
+                    pdfImportStatus = null
+                    coroutineScope.launch {
+                        localArchiveRepository.importPdfFile(rawPath)
+                            .onSuccess { result ->
+                                pdfImportStatus =
+                                    "Imported: ${result.title} (${result.pageCount} pages). Open it from Library."
+                            }
+                            .onFailure { error ->
+                                pdfImportStatus = error.message ?: "Failed to import PDF file"
+                            }
+                        pdfImportInProgress = false
+                    }
+                },
+                enabled = pdfImportPath.trim().isNotEmpty() && !pdfImportInProgress,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (pdfImportInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                    }
+                    Text("Import PDF")
+                }
+            }
+            val status = pdfImportStatus
+            if (!status.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = "Import PDF Directory",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = pdfDirectoryPath,
+                onValueChange = { value ->
+                    pdfDirectoryPath = value
+                    if (pdfDirectoryStatus != null) {
+                        pdfDirectoryStatus = null
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Absolute directory path") },
+                supportingText = {
+                    val supportText = if (isIosPlatform) {
+                        "PDF directory import currently works on Android only."
+                    } else {
+                        "Scans recursively and imports all .pdf files."
+                    }
+                    Text(supportText)
+                },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    val rawPath = pdfDirectoryPath.trim()
+                    if (rawPath.isBlank() || pdfDirectoryImportInProgress) {
+                        return@Button
+                    }
+                    pdfDirectoryImportInProgress = true
+                    pdfDirectoryStatus = null
+                    coroutineScope.launch {
+                        localArchiveRepository.importPdfDirectory(rawPath)
+                            .onSuccess { result ->
+                                pdfDirectoryStatus = buildDirectoryImportStatus(
+                                    result = result,
+                                    fileExtension = ".pdf",
+                                )
+                            }
+                            .onFailure { error ->
+                                pdfDirectoryStatus = error.message ?: "Failed to import PDF directory"
+                            }
+                        pdfDirectoryImportInProgress = false
+                    }
+                },
+                enabled = pdfDirectoryPath.trim().isNotEmpty() && !pdfDirectoryImportInProgress,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (pdfDirectoryImportInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.size(8.dp))
+                    }
+                    Text("Import PDF Directory")
+                }
+            }
+            val directoryStatus = pdfDirectoryStatus
+            if (!directoryStatus.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = directoryStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
     }
 }
 
@@ -286,9 +451,10 @@ private fun DnsOverHttpsProvider.displayName(): String = when (this) {
 
 private fun buildDirectoryImportStatus(
     result: com.wahon.shared.domain.model.LocalCbzImportBatchResult,
+    fileExtension: String,
 ): String {
     if (result.discovered == 0) {
-        return "No .cbz files were found in the selected directory."
+        return "No $fileExtension files were found in the selected directory."
     }
     if (result.failed == 0) {
         return "Imported ${result.imported}/${result.discovered} archives."

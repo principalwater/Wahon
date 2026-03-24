@@ -2,6 +2,7 @@ package com.wahon.shared.data.repository
 
 import com.wahon.shared.data.local.CbzArchiveReader
 import com.wahon.shared.data.local.LocalArchiveFileScanner
+import com.wahon.shared.data.local.LocalPdfPageRenderer
 import com.wahon.shared.data.local.OfflineChapterFileStore
 import com.wahon.shared.data.local.WahonDatabase
 import com.wahon.shared.data.remote.currentTimeMillis
@@ -24,6 +25,7 @@ class LocalArchiveRepositoryImpl(
     private val mangaRepository: MangaRepository,
     private val offlineChapterFileStore: OfflineChapterFileStore,
     private val cbzArchiveReader: CbzArchiveReader,
+    private val localPdfPageRenderer: LocalPdfPageRenderer,
     private val localArchiveFileScanner: LocalArchiveFileScanner,
 ) : LocalArchiveRepository {
 
@@ -39,7 +41,7 @@ class LocalArchiveRepositoryImpl(
         }
 
         val mangaUrl = normalizedPath
-        val chapterUrl = "$normalizedPath#cbz-main"
+        val chapterUrl = "$normalizedPath$CBZ_CHAPTER_SUFFIX"
         val chapterDataKey = offlineChapterDataKey(
             mangaUrl = mangaUrl,
             chapterUrl = chapterUrl,
@@ -220,17 +222,199 @@ class LocalArchiveRepositoryImpl(
         }
     }
 
+    override suspend fun importPdfFile(pdfPath: String): Result<LocalCbzImportResult> {
+        val normalizedPath = pdfPath.trim()
+        if (normalizedPath.isBlank()) {
+            return Result.failure(IllegalArgumentException("PDF path is blank"))
+        }
+
+        val mangaUrl = normalizedPath
+        val chapterUrl = "$normalizedPath$PDF_CHAPTER_SUFFIX"
+        val chapterDataKey = offlineChapterDataKey(
+            mangaUrl = mangaUrl,
+            chapterUrl = chapterUrl,
+        )
+
+        return runCatching {
+            val pageCount = localPdfPageRenderer.getPageCount(normalizedPath)
+            require(pageCount > 0) {
+                "PDF has no pages"
+            }
+
+            val title = deriveArchiveTitle(normalizedPath)
+            val now = currentTimeMillis()
+            val mangaId = buildMangaId(
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                mangaUrl = mangaUrl,
+            )
+            val chapterId = buildChapterId(
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapterUrl,
+            )
+
+            offlineChapterFileStore.deleteChapter(
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapterUrl,
+            )
+            database.source_dataQueries.deleteSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = chapterDataKey,
+            )
+
+            var totalBytes = 0L
+            val storedPages = buildList {
+                repeat(pageCount) { pageIndex ->
+                    val payload = localPdfPageRenderer.renderPageAsPng(
+                        pdfPath = normalizedPath,
+                        pageIndex = pageIndex,
+                    )
+                    require(payload.isNotEmpty()) {
+                        "Rendered PDF page payload is empty for page $pageIndex"
+                    }
+                    val imagePath = "page-${pageIndex.toString().padStart(4, '0')}.png"
+                    val artifact = offlineChapterFileStore.savePage(
+                        sourceId = LOCAL_CBZ_SOURCE_ID,
+                        mangaUrl = mangaUrl,
+                        chapterUrl = chapterUrl,
+                        pageIndex = pageIndex,
+                        imageUrl = imagePath,
+                        payload = payload,
+                    )
+                    totalBytes += artifact.sizeBytes
+                    add(
+                        OfflineDownloadedPageRecord(
+                            index = pageIndex,
+                            imageUrl = imagePath,
+                            relativePath = artifact.relativePath,
+                            sizeBytes = artifact.sizeBytes,
+                        ),
+                    )
+                }
+            }
+
+            val coverUrl = storedPages.firstOrNull()
+                ?.let { page -> offlineChapterFileStore.resolveFileUri(page.relativePath) }
+                .orEmpty()
+
+            val chapterName = "Document"
+            val record = OfflineDownloadedChapterRecord(
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapterUrl,
+                chapterName = chapterName,
+                downloadedAt = now,
+                totalBytes = totalBytes,
+                pages = storedPages,
+            )
+            database.source_dataQueries.upsertSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = chapterDataKey,
+                value_ = json.encodeToString(record),
+            )
+            database.source_dataQueries.upsertSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = offlineAutoDownloadKey(mangaUrl),
+                value_ = OFFLINE_AUTO_DOWNLOAD_DISABLED,
+            )
+
+            val manga = Manga(
+                id = mangaId,
+                title = title,
+                description = normalizedPath,
+                coverUrl = coverUrl,
+                status = MangaStatus.UNKNOWN,
+                inLibrary = true,
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                url = mangaUrl,
+            )
+            val chapter = Chapter(
+                id = chapterId,
+                mangaId = mangaId,
+                name = chapterName,
+                chapterNumber = 1f,
+                dateUpload = now,
+                read = false,
+                lastPageRead = 0,
+                url = chapterUrl,
+                scanlator = "",
+            )
+
+            mangaRepository.upsertMangaWithChapters(
+                manga = manga,
+                chapters = listOf(chapter),
+            )
+            mangaRepository.addToLibrary(manga)
+
+            LocalCbzImportResult(
+                mangaId = mangaId,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapterUrl,
+                title = title,
+                pageCount = storedPages.size,
+            )
+        }.onFailure {
+            offlineChapterFileStore.deleteChapter(
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                mangaUrl = mangaUrl,
+                chapterUrl = chapterUrl,
+            )
+            database.source_dataQueries.deleteSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = chapterDataKey,
+            )
+        }
+    }
+
+    override suspend fun importPdfDirectory(
+        directoryPath: String,
+        recursive: Boolean,
+    ): Result<LocalCbzImportBatchResult> {
+        val pdfFiles = runCatching {
+            localArchiveFileScanner.listPdfFiles(
+                directoryPath = directoryPath,
+                recursive = recursive,
+            ).sorted()
+        }.getOrElse { error ->
+            return Result.failure(error)
+        }
+
+        return runCatching {
+            var imported = 0
+            val failures = mutableListOf<LocalCbzImportFailure>()
+
+            pdfFiles.forEach { pdfPath ->
+                importPdfFile(pdfPath)
+                    .onSuccess {
+                        imported += 1
+                    }
+                    .onFailure { error ->
+                        failures += LocalCbzImportFailure(
+                            archivePath = pdfPath,
+                            reason = error.message ?: "Unknown import failure",
+                        )
+                    }
+            }
+
+            LocalCbzImportBatchResult(
+                discovered = pdfFiles.size,
+                imported = imported,
+                failed = failures.size,
+                failures = failures,
+            )
+        }
+    }
+
     override suspend fun removeImportedCbz(mangaUrl: String): Result<Unit> {
         val normalizedMangaUrl = mangaUrl.trim()
         if (normalizedMangaUrl.isBlank()) {
             return Result.failure(IllegalArgumentException("Manga URL is blank"))
         }
 
-        val chapterUrl = "$normalizedMangaUrl#cbz-main"
-        val chapterId = buildChapterId(
-            sourceId = LOCAL_CBZ_SOURCE_ID,
-            mangaUrl = normalizedMangaUrl,
-            chapterUrl = chapterUrl,
+        val chapterUrls = listOf(
+            "$normalizedMangaUrl$CBZ_CHAPTER_SUFFIX",
+            "$normalizedMangaUrl$PDF_CHAPTER_SUFFIX",
         )
         val mangaId = buildMangaId(
             sourceId = LOCAL_CBZ_SOURCE_ID,
@@ -238,31 +422,38 @@ class LocalArchiveRepositoryImpl(
         )
 
         return runCatching {
-            offlineChapterFileStore.deleteChapter(
-                sourceId = LOCAL_CBZ_SOURCE_ID,
-                mangaUrl = normalizedMangaUrl,
-                chapterUrl = chapterUrl,
-            )
-            database.source_dataQueries.deleteSourceData(
-                source_id = LOCAL_CBZ_SOURCE_ID,
-                key = offlineChapterDataKey(
+            chapterUrls.forEach { chapterUrl ->
+                offlineChapterFileStore.deleteChapter(
+                    sourceId = LOCAL_CBZ_SOURCE_ID,
                     mangaUrl = normalizedMangaUrl,
                     chapterUrl = chapterUrl,
-                ),
-            )
+                )
+                database.source_dataQueries.deleteSourceData(
+                    source_id = LOCAL_CBZ_SOURCE_ID,
+                    key = offlineChapterDataKey(
+                        mangaUrl = normalizedMangaUrl,
+                        chapterUrl = chapterUrl,
+                    ),
+                )
+                database.source_dataQueries.deleteSourceData(
+                    source_id = LOCAL_CBZ_SOURCE_ID,
+                    key = "$CHAPTER_PROGRESS_KEY_PREFIX$chapterUrl",
+                )
+                val chapterId = buildChapterId(
+                    sourceId = LOCAL_CBZ_SOURCE_ID,
+                    mangaUrl = normalizedMangaUrl,
+                    chapterUrl = chapterUrl,
+                )
+                database.historyQueries.deleteHistoryByChapterId(chapterId)
+            }
             database.source_dataQueries.deleteSourceData(
                 source_id = LOCAL_CBZ_SOURCE_ID,
                 key = offlineAutoDownloadKey(normalizedMangaUrl),
             )
             database.source_dataQueries.deleteSourceData(
                 source_id = LOCAL_CBZ_SOURCE_ID,
-                key = "$CHAPTER_PROGRESS_KEY_PREFIX$chapterUrl",
-            )
-            database.source_dataQueries.deleteSourceData(
-                source_id = LOCAL_CBZ_SOURCE_ID,
                 key = "$MANGA_LAST_READ_KEY_PREFIX$normalizedMangaUrl",
             )
-            database.historyQueries.deleteHistoryByChapterId(chapterId)
             database.mangaQueries.deleteMangaById(mangaId)
         }
     }
@@ -277,5 +468,7 @@ class LocalArchiveRepositoryImpl(
     private companion object {
         private const val CHAPTER_PROGRESS_KEY_PREFIX = "chapter_progress::"
         private const val MANGA_LAST_READ_KEY_PREFIX = "manga_last_read::"
+        private const val CBZ_CHAPTER_SUFFIX = "#cbz-main"
+        private const val PDF_CHAPTER_SUFFIX = "#pdf-main"
     }
 }

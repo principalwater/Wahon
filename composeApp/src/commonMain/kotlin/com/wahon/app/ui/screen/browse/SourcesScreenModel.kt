@@ -1143,9 +1143,9 @@ class SourcesScreenModel(
                         hasNextFeedPage = false,
                         feedError = if (manga.isEmpty()) {
                             if (query.isBlank()) {
-                                "No imported local CBZ files yet. Import one from More."
+                                "No imported local files yet. Import one from More."
                             } else {
-                                "No local CBZ entries found for query: $query"
+                                "No local entries found for query: $query"
                             }
                         } else {
                             null
@@ -1158,7 +1158,7 @@ class SourcesScreenModel(
                     feedManga = emptyList(),
                     feedPage = 0,
                     hasNextFeedPage = false,
-                    feedError = localFeed.exceptionOrNull()?.message ?: "Failed to load local CBZ feed",
+                    feedError = localFeed.exceptionOrNull()?.message ?: "Failed to load local feed",
                 )
             }
         }

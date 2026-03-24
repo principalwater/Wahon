@@ -16,5 +16,12 @@ interface LocalArchiveRepository {
         recursive: Boolean = true,
     ): Result<LocalCbzImportBatchResult>
 
+    suspend fun importPdfFile(pdfPath: String): Result<LocalCbzImportResult>
+
+    suspend fun importPdfDirectory(
+        directoryPath: String,
+        recursive: Boolean = true,
+    ): Result<LocalCbzImportBatchResult>
+
     suspend fun removeImportedCbz(mangaUrl: String): Result<Unit>
 }
