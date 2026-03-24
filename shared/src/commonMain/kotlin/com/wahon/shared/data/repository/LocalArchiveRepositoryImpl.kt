@@ -220,10 +220,62 @@ class LocalArchiveRepositoryImpl(
         }
     }
 
+    override suspend fun removeImportedCbz(mangaUrl: String): Result<Unit> {
+        val normalizedMangaUrl = mangaUrl.trim()
+        if (normalizedMangaUrl.isBlank()) {
+            return Result.failure(IllegalArgumentException("Manga URL is blank"))
+        }
+
+        val chapterUrl = "$normalizedMangaUrl#cbz-main"
+        val chapterId = buildChapterId(
+            sourceId = LOCAL_CBZ_SOURCE_ID,
+            mangaUrl = normalizedMangaUrl,
+            chapterUrl = chapterUrl,
+        )
+        val mangaId = buildMangaId(
+            sourceId = LOCAL_CBZ_SOURCE_ID,
+            mangaUrl = normalizedMangaUrl,
+        )
+
+        return runCatching {
+            offlineChapterFileStore.deleteChapter(
+                sourceId = LOCAL_CBZ_SOURCE_ID,
+                mangaUrl = normalizedMangaUrl,
+                chapterUrl = chapterUrl,
+            )
+            database.source_dataQueries.deleteSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = offlineChapterDataKey(
+                    mangaUrl = normalizedMangaUrl,
+                    chapterUrl = chapterUrl,
+                ),
+            )
+            database.source_dataQueries.deleteSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = offlineAutoDownloadKey(normalizedMangaUrl),
+            )
+            database.source_dataQueries.deleteSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = "$CHAPTER_PROGRESS_KEY_PREFIX$chapterUrl",
+            )
+            database.source_dataQueries.deleteSourceData(
+                source_id = LOCAL_CBZ_SOURCE_ID,
+                key = "$MANGA_LAST_READ_KEY_PREFIX$normalizedMangaUrl",
+            )
+            database.historyQueries.deleteHistoryByChapterId(chapterId)
+            database.mangaQueries.deleteMangaById(mangaId)
+        }
+    }
+
     private fun deriveArchiveTitle(path: String): String {
         val fileName = path.substringAfterLast('/').substringAfterLast('\\')
         if (fileName.isBlank()) return "Local CBZ"
         val base = fileName.substringBeforeLast('.', missingDelimiterValue = fileName)
         return base.ifBlank { fileName }
+    }
+
+    private companion object {
+        private const val CHAPTER_PROGRESS_KEY_PREFIX = "chapter_progress::"
+        private const val MANGA_LAST_READ_KEY_PREFIX = "manga_last_read::"
     }
 }

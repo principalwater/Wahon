@@ -23,7 +23,7 @@ fun initKoin(appDeclaration: KoinApplication.() -> Unit = {}) =
 val appModule = module {
     single { BrowseOpenRequestBus() }
     factory { HistoryScreenModel(get(), get()) }
-    factory { LibraryScreenModel(get(), get(), get(), get()) }
+    factory { LibraryScreenModel(get(), get(), get(), get(), get()) }
     factory { UpdatesScreenModel(get(), get()) }
     factory { ExtensionsScreenModel(get(), get()) }
     factory { SourcesScreenModel(get(), get(), get(), get(), get()) }

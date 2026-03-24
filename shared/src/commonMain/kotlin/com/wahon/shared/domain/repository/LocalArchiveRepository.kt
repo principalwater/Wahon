@@ -15,4 +15,6 @@ interface LocalArchiveRepository {
         directoryPath: String,
         recursive: Boolean = true,
     ): Result<LocalCbzImportBatchResult>
+
+    suspend fun removeImportedCbz(mangaUrl: String): Result<Unit>
 }

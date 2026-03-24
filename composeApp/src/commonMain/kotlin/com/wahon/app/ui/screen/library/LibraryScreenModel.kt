@@ -7,7 +7,9 @@ import com.wahon.app.navigation.BrowseOpenOrigin
 import com.wahon.app.navigation.BrowseOpenRequestBus
 import com.wahon.shared.domain.model.Manga
 import com.wahon.shared.domain.model.MangaLastRead
+import com.wahon.shared.domain.model.LOCAL_CBZ_SOURCE_ID
 import com.wahon.shared.domain.repository.ExtensionRuntimeRepository
+import com.wahon.shared.domain.repository.LocalArchiveRepository
 import com.wahon.shared.domain.repository.MangaRepository
 import com.wahon.shared.domain.repository.ReaderProgressRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +23,7 @@ class LibraryScreenModel(
     private val mangaRepository: MangaRepository,
     private val readerProgressRepository: ReaderProgressRepository,
     private val extensionRuntimeRepository: ExtensionRuntimeRepository,
+    private val localArchiveRepository: LocalArchiveRepository,
     private val browseOpenRequestBus: BrowseOpenRequestBus,
 ) : ScreenModel {
 
@@ -58,10 +61,17 @@ class LibraryScreenModel(
         }
     }
 
-    fun removeFromLibrary(mangaId: String) {
+    fun removeFromLibrary(manga: Manga) {
         screenModelScope.launch {
             runCatching {
-                mangaRepository.removeFromLibrary(mangaId)
+                if (manga.sourceId == LOCAL_CBZ_SOURCE_ID) {
+                    localArchiveRepository.removeImportedCbz(mangaUrl = manga.url)
+                        .getOrElse { error ->
+                            throw error
+                        }
+                } else {
+                    mangaRepository.removeFromLibrary(manga.id)
+                }
             }.onFailure { error ->
                 _state.update { current ->
                     current.copy(

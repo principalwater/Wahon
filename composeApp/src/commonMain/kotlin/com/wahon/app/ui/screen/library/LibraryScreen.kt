@@ -109,7 +109,7 @@ fun LibraryScreen(
                             screenModel.resumeManga(manga)
                             onNavigateToBrowse()
                         },
-                        onRemove = { screenModel.removeFromLibrary(manga.id) },
+                        onRemove = { screenModel.removeFromLibrary(manga) },
                     )
                 }
             }
