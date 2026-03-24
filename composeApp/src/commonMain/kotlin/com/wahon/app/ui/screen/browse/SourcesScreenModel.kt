@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -167,7 +168,9 @@ class SourcesScreenModel(
                 openOrigin = origin,
             )
         }
-        if (source.isRuntimeExecutable) {
+        if (source.extensionId == LOCAL_CBZ_SOURCE_ID) {
+            loadLocalFeed()
+        } else if (source.isRuntimeExecutable) {
             loadFeedPage(page = 1, append = false)
         }
     }
@@ -220,6 +223,10 @@ class SourcesScreenModel(
     fun runSearch() {
         val current = _state.value
         val selectedSource = current.selectedSource ?: return
+        if (selectedSource.extensionId == LOCAL_CBZ_SOURCE_ID) {
+            loadLocalFeed()
+            return
+        }
         if (!selectedSource.isRuntimeExecutable) return
 
         val query = current.feedQuery.trim()
@@ -250,6 +257,21 @@ class SourcesScreenModel(
     }
 
     fun clearSearch() {
+        if (_state.value.selectedSourceId == LOCAL_CBZ_SOURCE_ID) {
+            _state.update {
+                it.copy(
+                    feedQuery = "",
+                    feedMode = SourceFeedMode.POPULAR,
+                    feedManga = emptyList(),
+                    feedPage = 0,
+                    hasNextFeedPage = false,
+                    feedError = null,
+                )
+            }
+            loadLocalFeed()
+            return
+        }
+
         _state.update {
             it.copy(
                 feedQuery = "",
@@ -266,6 +288,10 @@ class SourcesScreenModel(
     fun retryFeed() {
         val current = _state.value
         val selectedSource = current.selectedSource ?: return
+        if (selectedSource.extensionId == LOCAL_CBZ_SOURCE_ID) {
+            loadLocalFeed()
+            return
+        }
         if (!selectedSource.isRuntimeExecutable) return
         loadFeedPage(page = 1, append = false)
     }
@@ -1071,6 +1097,69 @@ class SourcesScreenModel(
                         feedError = error.message ?: "Failed to load feed",
                     )
                 }
+            }
+        }
+    }
+
+    private fun loadLocalFeed() {
+        val snapshot = _state.value
+        if (snapshot.selectedSourceId != LOCAL_CBZ_SOURCE_ID) return
+
+        val query = snapshot.feedQuery.trim()
+        _state.update { current ->
+            if (current.selectedSourceId != LOCAL_CBZ_SOURCE_ID) {
+                current
+            } else {
+                current.copy(
+                    isLoadingFeed = true,
+                    feedMode = if (query.isBlank()) SourceFeedMode.POPULAR else SourceFeedMode.SEARCH,
+                    feedError = null,
+                )
+            }
+        }
+
+        screenModelScope.launch {
+            val localFeed = runCatching {
+                mangaRepository.getLibraryManga()
+                    .first()
+                    .asSequence()
+                    .filter { manga -> manga.sourceId == LOCAL_CBZ_SOURCE_ID }
+                    .filter { manga ->
+                        query.isBlank() || manga.title.contains(query, ignoreCase = true)
+                    }
+                    .sortedBy { manga -> manga.title.lowercase() }
+                    .map { manga -> manga.toExtensionMangaInfo() }
+                    .toList()
+            }
+
+            _state.update { current ->
+                if (current.selectedSourceId != LOCAL_CBZ_SOURCE_ID) return@update current
+
+                localFeed.onSuccess { manga ->
+                    return@update current.copy(
+                        isLoadingFeed = false,
+                        feedManga = manga,
+                        feedPage = 1,
+                        hasNextFeedPage = false,
+                        feedError = if (manga.isEmpty()) {
+                            if (query.isBlank()) {
+                                "No imported local CBZ files yet. Import one from More."
+                            } else {
+                                "No local CBZ entries found for query: $query"
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                }
+
+                current.copy(
+                    isLoadingFeed = false,
+                    feedManga = emptyList(),
+                    feedPage = 0,
+                    hasNextFeedPage = false,
+                    feedError = localFeed.exceptionOrNull()?.message ?: "Failed to load local CBZ feed",
+                )
             }
         }
     }
