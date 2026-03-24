@@ -13,6 +13,10 @@ import platform.Foundation.NSHTTPCookie
 import platform.Foundation.NSHTTPCookieStorage
 import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
+import platform.UIKit.UIApplication
+import platform.UIKit.UIViewAutoresizingFlexibleHeight
+import platform.UIKit.UIViewAutoresizingFlexibleWidth
+import platform.UIKit.UIViewController
 import platform.WebKit.WKWebView
 import platform.WebKit.WKWebViewConfiguration
 
@@ -70,10 +74,22 @@ class IosWkWebViewAntiBotChallengeResolver(
 
                 if (resolvedCookieHeader.isNullOrBlank()) {
                     Napier.w(
-                        message = "Anti-bot resolve timeout for $requestUrl (${challenge.protection})",
+                        message = "Auto anti-bot resolve timeout for $requestUrl (${challenge.protection}). Starting manual fallback.",
                         tag = LOG_TAG,
                     )
-                    return@withContext false
+                    webView.stopLoading()
+                    resolvedCookieHeader = runManualFallback(
+                        nsUrl = nsUrl,
+                        userAgent = userAgent,
+                        expectedCookies = expectedCookies,
+                    )
+                    if (resolvedCookieHeader.isNullOrBlank()) {
+                        Napier.w(
+                            message = "Manual anti-bot fallback did not resolve challenge for $requestUrl",
+                            tag = LOG_TAG,
+                        )
+                        return@withContext false
+                    }
                 }
                 val cookieHeader = resolvedCookieHeader ?: return@withContext false
 
@@ -120,6 +136,59 @@ class IosWkWebViewAntiBotChallengeResolver(
             }
         return cookies.joinToString("; ")
     }
+
+    private suspend fun runManualFallback(
+        nsUrl: NSURL,
+        userAgent: String,
+        expectedCookies: Set<String>,
+    ): String? {
+        val presenter = topViewController() ?: return null
+        val manualController = UIViewController()
+        val manualWebView = WKWebView(
+            frame = presenter.view.bounds,
+            configuration = WKWebViewConfiguration(),
+        ).apply {
+            autoresizingMask = UIViewAutoresizingFlexibleWidth or UIViewAutoresizingFlexibleHeight
+            if (userAgent.isNotBlank()) {
+                customUserAgent = userAgent
+            }
+        }
+        manualController.view.addSubview(manualWebView)
+        presenter.presentViewController(
+            viewControllerToPresent = manualController,
+            animated = true,
+            completion = null,
+        )
+        manualWebView.loadRequest(NSURLRequest.requestWithURL(nsUrl))
+
+        var resolvedCookieHeader: String? = null
+        withTimeoutOrNull(ANTI_BOT_MANUAL_TIMEOUT_MS) {
+            while (resolvedCookieHeader.isNullOrBlank()) {
+                val cookieHeader = readCookieHeader(nsUrl)
+                if (hasExpectedCookie(cookieHeader, expectedCookies)) {
+                    resolvedCookieHeader = cookieHeader
+                } else {
+                    delay(ANTI_BOT_COOKIE_POLL_INTERVAL_MS)
+                }
+            }
+        }
+
+        manualWebView.stopLoading()
+        manualController.dismissViewControllerAnimated(
+            flag = true,
+            completion = null,
+        )
+        return resolvedCookieHeader
+    }
+
+    private fun topViewController(): UIViewController? {
+        var current = UIApplication.sharedApplication.keyWindow?.rootViewController ?: return null
+        while (current.presentedViewController != null) {
+            current = current.presentedViewController!!
+        }
+        return current
+    }
 }
 
 private const val LOG_TAG = "IosAntiBotResolver"
+private const val ANTI_BOT_MANUAL_TIMEOUT_MS = 60_000L
