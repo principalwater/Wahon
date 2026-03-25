@@ -14,13 +14,30 @@ enum class AntiBotProtection {
 fun detectAntiBotChallenge(
     statusCode: Int,
     serverHeader: String?,
+    responseHeaders: Map<String, List<String>> = emptyMap(),
 ): AntiBotChallenge? {
     if (statusCode !in CHALLENGE_STATUS_CODES) return null
     val normalizedServer = serverHeader.orEmpty().lowercase()
+    val normalizedHeaders = responseHeaders
+        .entries
+        .associate { (name, values) ->
+            name.lowercase() to values.joinToString(separator = ",").lowercase()
+        }
+    val cfRayHeader = normalizedHeaders["cf-ray"].orEmpty()
+    val cfMitigatedHeader = normalizedHeaders["cf-mitigated"].orEmpty()
+    val setCookieHeader = normalizedHeaders["set-cookie"].orEmpty()
+    val xDdosProtectionHeader = normalizedHeaders["x-ddos-protection"].orEmpty()
 
     val protection = when {
-        normalizedServer.contains("cloudflare") -> AntiBotProtection.CLOUDFLARE
-        normalizedServer.contains("ddos-guard") -> AntiBotProtection.DDOS_GUARD
+        normalizedServer.contains("cloudflare") ||
+            cfRayHeader.isNotBlank() ||
+            cfMitigatedHeader.contains("challenge") -> AntiBotProtection.CLOUDFLARE
+
+        normalizedServer.contains("ddos-guard") ||
+            setCookieHeader.contains("__ddg") ||
+            setCookieHeader.contains("ddg_clearance") ||
+            xDdosProtectionHeader.contains("ddos-guard") -> AntiBotProtection.DDOS_GUARD
+
         else -> null
     } ?: return null
 

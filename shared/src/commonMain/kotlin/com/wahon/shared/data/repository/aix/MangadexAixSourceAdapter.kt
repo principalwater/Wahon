@@ -269,6 +269,8 @@ class MangadexAixSourceAdapter(
         val challengeByStatus = detectAntiBotChallenge(
             statusCode = statusCode,
             serverHeader = response.headers[HttpHeaders.Server],
+            responseHeaders = response.headers.entries()
+                .associate { entry -> entry.key to entry.value },
         )
         val challengeByHtml = detectAntiBotProtectionByHtml(raw)
 

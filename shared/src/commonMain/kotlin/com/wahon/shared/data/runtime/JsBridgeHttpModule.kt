@@ -84,9 +84,12 @@ internal object JsBridgeHttpModule {
             }
         }
         val responseBody = response.bodyAsText()
+        val responseHeaders = response.headers.entries()
+            .associate { entry -> entry.key to entry.value }
         enforceNoAntiBotChallenge(
             statusCode = response.status.value,
             serverHeader = response.headers[HttpHeaders.Server],
+            responseHeaders = responseHeaders,
             responseBody = responseBody,
             requestUrl = url,
         )
@@ -143,12 +146,14 @@ internal object JsBridgeHttpModule {
     private fun enforceNoAntiBotChallenge(
         statusCode: Int,
         serverHeader: String?,
+        responseHeaders: Map<String, List<String>>,
         responseBody: String,
         requestUrl: String,
     ) {
         val byStatus = detectAntiBotChallenge(
             statusCode = statusCode,
             serverHeader = serverHeader,
+            responseHeaders = responseHeaders,
         )
         val byHtml = detectAntiBotProtectionByHtml(responseBody)
         if (byStatus == null && byHtml == null) return

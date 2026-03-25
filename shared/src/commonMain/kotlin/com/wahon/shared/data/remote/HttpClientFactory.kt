@@ -56,6 +56,8 @@ fun createHttpClient(
         val challenge = detectAntiBotChallenge(
             statusCode = response.response.status.value,
             serverHeader = response.response.headers[HttpHeaders.Server],
+            responseHeaders = response.response.headers.entries()
+                .associate { entry -> entry.key to entry.value },
         )
         if (challenge != null) {
             Napier.w(
@@ -88,6 +90,8 @@ fun createHttpClient(
             val retryChallenge = detectAntiBotChallenge(
                 statusCode = response.response.status.value,
                 serverHeader = response.response.headers[HttpHeaders.Server],
+                responseHeaders = response.response.headers.entries()
+                    .associate { entry -> entry.key to entry.value },
             )
             if (retryChallenge != null) {
                 Napier.w(
