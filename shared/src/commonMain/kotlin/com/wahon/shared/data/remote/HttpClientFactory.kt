@@ -85,6 +85,17 @@ fun createHttpClient(
                 tag = LOG_TAG,
             )
             response = execute(request)
+            val retryChallenge = detectAntiBotChallenge(
+                statusCode = response.response.status.value,
+                serverHeader = response.response.headers[HttpHeaders.Server],
+            )
+            if (retryChallenge != null) {
+                Napier.w(
+                    message = "Anti-bot challenge persists after retry: ${retryChallenge.protection} ${retryChallenge.statusCode} for ${request.url}",
+                    tag = LOG_TAG,
+                )
+                error(ANTI_BOT_ERROR_MESSAGE)
+            }
         }
         response
     }
