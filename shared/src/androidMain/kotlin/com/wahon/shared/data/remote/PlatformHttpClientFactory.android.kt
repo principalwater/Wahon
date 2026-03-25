@@ -11,18 +11,74 @@ import okhttp3.OkHttpClient
 import okhttp3.dnsoverhttps.DnsOverHttps
 
 actual fun createPlatformHttpClient(
-    dohProvider: DnsOverHttpsProvider,
+    dohProviderResolver: () -> DnsOverHttpsProvider,
     configure: HttpClientConfig<*>.() -> Unit,
 ): HttpClient {
+    val dnsResolver = DynamicDohDnsResolver(dohProviderResolver)
     return HttpClient(OkHttp) {
-        if (dohProvider != DnsOverHttpsProvider.DISABLED) {
-            engine {
-                config {
-                    dns(createDnsResolver(dohProvider))
-                }
+        engine {
+            config {
+                dns(dnsResolver)
             }
         }
         configure()
+    }
+}
+
+private class DynamicDohDnsResolver(
+    private val dohProviderResolver: () -> DnsOverHttpsProvider,
+) : Dns {
+    private val resolverCache = mutableMapOf<DnsOverHttpsProvider, Dns>()
+
+    @Volatile
+    private var lastObservedProvider: DnsOverHttpsProvider = DnsOverHttpsProvider.DISABLED
+
+    override fun lookup(hostname: String): List<InetAddress> {
+        val provider = runCatching(dohProviderResolver)
+            .getOrDefault(DnsOverHttpsProvider.DISABLED)
+        maybeLogProviderChange(provider)
+
+        if (provider == DnsOverHttpsProvider.DISABLED) {
+            return Dns.SYSTEM.lookup(hostname)
+        }
+
+        val resolver = synchronized(this) {
+            resolverCache.getOrPut(provider) { createDnsResolver(provider) }
+        }
+        return runCatching {
+            resolver.lookup(hostname)
+        }.onFailure { error ->
+            Napier.w(
+                message = "DoH lookup failed for $hostname with ${provider.storageValue}, fallback to system DNS: ${error.message.orEmpty()}",
+                tag = LOG_TAG,
+            )
+        }.getOrElse {
+            Dns.SYSTEM.lookup(hostname)
+        }
+    }
+
+    private fun maybeLogProviderChange(provider: DnsOverHttpsProvider) {
+        val shouldLog = synchronized(this) {
+            if (provider == lastObservedProvider) {
+                false
+            } else {
+                lastObservedProvider = provider
+                true
+            }
+        }
+        if (!shouldLog) return
+
+        if (provider == DnsOverHttpsProvider.DISABLED) {
+            Napier.i(
+                message = "DNS-over-HTTPS disabled. Using system DNS.",
+                tag = LOG_TAG,
+            )
+        } else {
+            Napier.i(
+                message = "DNS-over-HTTPS provider switched to ${provider.storageValue}.",
+                tag = LOG_TAG,
+            )
+        }
     }
 }
 

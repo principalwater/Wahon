@@ -46,7 +46,7 @@ val sharedModule = module {
             rateLimiter = get(),
             cookiesStorage = get(),
             antiBotChallengeResolver = get(),
-            dohProvider = get<NetworkPreferencesStore>().selectedDohProvider(),
+            dohProviderResolver = { get<NetworkPreferencesStore>().selectedDohProvider() },
         )
     }
     single { ExtensionRepoApi(get()) }

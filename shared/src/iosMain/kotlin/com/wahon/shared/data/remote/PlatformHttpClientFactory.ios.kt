@@ -6,9 +6,11 @@ import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.darwin.Darwin
 
 actual fun createPlatformHttpClient(
-    dohProvider: DnsOverHttpsProvider,
+    dohProviderResolver: () -> DnsOverHttpsProvider,
     configure: HttpClientConfig<*>.() -> Unit,
 ): HttpClient {
+    val dohProvider = runCatching(dohProviderResolver)
+        .getOrDefault(DnsOverHttpsProvider.DISABLED)
     if (dohProvider != DnsOverHttpsProvider.DISABLED) {
         Napier.w(
             message = "DoH provider ${dohProvider.storageValue} is not yet supported on iOS Darwin engine. Using system DNS.",

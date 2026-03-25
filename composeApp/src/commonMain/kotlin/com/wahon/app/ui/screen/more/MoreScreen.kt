@@ -83,9 +83,10 @@ fun MoreScreen() {
     val isIosPlatform = platformName.startsWith("iOS", ignoreCase = true)
     val dohNote = buildString {
         append("Current: ${dohProvider.displayName()}. Tap to switch.")
-        append(" Requires app restart.")
         if (isIosPlatform) {
             append(" iOS DoH backend is not implemented yet.")
+        } else {
+            append(" Applies immediately for new requests.")
         }
     }
 
